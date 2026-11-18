@@ -988,5 +988,17 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
 		}
 	}
+	if perfAnalysisDue(s.store.Snapshot(), s.now()) {
+		if r, err := s.AnalyzePerformance(ctx, ""); err == nil {
+			out["perf"] = r
+		} else {
+			// catégorie fixe : le détail de l'erreur n'est pas journalisé
+			kind := perfErrorKind(err)
+			_ = s.store.Update(func(d *Data) error {
+				d.AddLog("error", "analyse des performances : %s, nouvel essai au prochain passage", kind)
+				return nil
+			})
+		}
+	}
 	return out
 }

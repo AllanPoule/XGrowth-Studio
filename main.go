@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -27,6 +28,13 @@ import (
 const version = "0.09"
 
 var pretty bool
+
+// Sortie et fin des commandes : les tests les remplacent pour lire l'enveloppe
+// sans quitter le processus.
+var (
+	stdout io.Writer = os.Stdout
+	exit             = os.Exit
+)
 
 type envelope struct {
 	OK            bool      `json:"ok"`
@@ -42,16 +50,16 @@ type apiError struct {
 
 func emit(data any) {
 	writeEnvelope(envelope{OK: true, SchemaVersion: "1", Data: data})
-	os.Exit(0)
+	exit(0)
 }
 
 func fail(code string, err error) {
 	writeEnvelope(envelope{OK: false, SchemaVersion: "1", Error: &apiError{Code: code, Message: err.Error()}})
-	os.Exit(1)
+	exit(1)
 }
 
 func writeEnvelope(e envelope) {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	enc.SetEscapeHTML(false)
 	if pretty {
 		enc.SetIndent("", "  ")
@@ -64,7 +72,7 @@ func writeEnvelope(e envelope) {
 var boolFlags = map[string]bool{
 	"pretty": true, "now": true, "quote": true, "draft": true, "premium": true, "auto-triage": true,
 	"auto-draft": true, "no-scheduler": true, "help": true, "no-auth": true,
-	"rules-auto-accept": true, "auto-synthesis": true, "automated": true, "ideas-enabled": true,
+	"rules-auto-accept": true, "auto-synthesis": true, "auto-perf-analysis": true, "automated": true, "ideas-enabled": true,
 	"ideas-auto-draft": true, "ignore": true,
 }
 
@@ -785,12 +793,16 @@ func cmdRules(ctx context.Context, st *Studio, a args) {
 		r, err := st.Synthesize(ctx, a.str("account"))
 		check(err)
 		emit(r)
+	case "analyze":
+		r, err := st.AnalyzePerformance(ctx, a.str("account"))
+		check(err)
+		emit(r)
 	case "accept", "refuse", "revoke":
 		r, err := st.DecideRule(need(a, 1, "rules "+a.arg(0)+" <id>"), a.arg(0), a.str("text"))
 		check(err)
 		emit(r)
 	default:
-		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|accept|refuse|revoke"))
+		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|analyze|accept|refuse|revoke"))
 	}
 }
 
@@ -999,6 +1011,9 @@ func cmdSettings(store *Store, a args) {
 		if a.has("auto-synthesis") {
 			s.AutoSynthesis = a.boolean("auto-synthesis")
 		}
+		if a.has("auto-perf-analysis") {
+			s.AutoPerfAnalysis = a.boolean("auto-perf-analysis")
+		}
 		return NormalizeSettings(s)
 	}))
 	emit(store.Snapshot().Settings)
@@ -1029,6 +1044,7 @@ COMPTES
            [--rules "une règle par ligne" | --rules-file regles.txt] [--post-types JSON|@types.json|defaut]
            [--ideas-prompt …] [--item-prompt …] [--reply-prompt …] [--quote-prompt …] [--rewrite-prompt …]
            [--visual-guide …] [--rules-auto-accept[=false]] [--auto-synthesis[=false]] [--comments-prompt "..."]
+           [--auto-perf-analysis[=false]]   analyse hebdomadaire des performances (désactivée par défaut)
   providers                              IA détectées sur cette machine (Claude Code, Codex, Gemini, API)
   ai-test [--provider p] [--model m]     vérifie qu'une IA répond
 
@@ -1065,6 +1081,7 @@ RÉDACTION
   ideas keep|dismiss <id> | ideas draft <id>   retenir, écarter, rédiger le post d'une idée
   rules [list]                           règles communes et règles apprises
   rules synthesize [--account c]         l'IA tire des règles des retours (rejets, réécritures, leçons)
+  rules analyze [--account c]            l'IA propose des règles appuyées sur les performances mesurées
   rules accept <id> [--text "..."] | refuse <id> | revoke <id>
 
 CAMPAGNES DE RÉPONSES (prospection ; rien ne part sans validation)
