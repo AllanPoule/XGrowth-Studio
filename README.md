@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/favicon.svg" width="72" alt="">
+<img src="web/favicon.svg" width="88" alt="XGrowth Studio">
 
 # XGrowth Studio
 
@@ -8,13 +8,15 @@
 Claude Code, Codex (ChatGPT), Gemini CLI ou l'API Claude écrivent dans votre voix.
 Vous validez. XGrowth publie.
 
-[Fonctionnalités](#fonctionnalités) · [Démarrage](#démarrage-en-2-minutes) · [IA](#lia-de-votre-choix) · [Connexion à X](#connexion-à-x) · [Déploiement privé](#déploiement-privé-netbird-tailscale) · [CLI et agents](#cli-et-agents) · [English](#english)
+[Fonctionnalités](#fonctionnalités) · [Démarrage](#démarrage-en-2-minutes) · [IA](#lia-de-votre-choix) · [Connexion à X](#connexion-à-x) · [Déploiement privé](#déploiement-privé-netbird-tailscale) · [CLI et agents](#cli-et-agents) · [Identité visuelle](docs/BRAND.md) · [English](#english)
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
 ![Licence](https://img.shields.io/badge/licence-AGPL--3.0-8b5cf6)
 ![Un binaire](https://img.shields.io/badge/d%C3%A9ploiement-un%20binaire-22d3ee)
 
 </div>
+
+![XGrowth Studio — Your voice. Amplified.](web/social-cover.svg)
 
 ---
 
@@ -147,6 +149,10 @@ le mot de passe n'y figure que haché.
 ```bash
 make test        # go vet + tests
 ```
+
+## Identité visuelle
+
+**Editorial Intelligence.** Un studio graphite, lime et menthe, avec un symbole vectoriel de croissance, des thèmes clair et sombre et des composants unifiés. La charte détaille les couleurs, la typographie, les règles de logo, l’accessibilité et les écrans : [découvrir la charte graphique](docs/BRAND.md).
 
 ## Crédits et licence
 

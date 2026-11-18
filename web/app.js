@@ -12,7 +12,7 @@ const store = {
 const len = s => [...(s || "")].length;
 
 const I = {
-  logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 11 13M5 5l14 14M19 5l-6 6"/><path d="M15 3h6v6"/></svg>',
+  logo: '<img src="/favicon.svg" alt="" draggable="false">',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></svg>',
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
@@ -137,12 +137,13 @@ async function boot() {
 function applyTheme() {
   const t = store.get("theme", "dark");
   document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#f3f5f1" : "#0b1015");
 }
 
 // ------------------------------------------------------------------ écrans d'accès
 function authShell(inner) {
   $("#root").innerHTML = `<div class="overlay"><div class="authbox">
-    <div class="brand" style="justify-content:center;padding-bottom:22px"><span class="mark">${I.logo}</span>XGrowth Studio</div>
+    <div class="brand" style="justify-content:center;padding-bottom:22px"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span></div>
     <div class="card">${inner}</div>
     <p class="small faint" style="text-align:center;margin-top:16px">Logiciel libre sous AGPL-3.0 · <a href="${SOURCE_URL}" target="_blank" rel="noopener">code source</a></p></div></div>`;
 }
@@ -192,7 +193,7 @@ function render() {
   const navItem = ([k, l, ic], cls = "") => `<a href="#/${k}" class="${k === r ? "on" : ""} ${cls}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`;
   $("#root").innerHTML = `<div class="app">
     <aside class="side">
-      <div class="brand"><span class="mark">${I.logo}</span>XGrowth</div>
+      <div class="brand"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span></div>
       <nav class="nav">${ROUTES.map(x => navItem(x)).join("")}</nav>
       <div class="grow"></div>
       <button class="aipill" data-go="settings">
@@ -202,7 +203,7 @@ function render() {
       <div class="sidefoot"><button class="btn ghost sm" data-act="theme" title="Thème">${I.moon}</button><a class="btn ghost sm" href="${SOURCE_URL}" target="_blank" rel="noopener" title="Code source (AGPL-3.0)">Code source</a><span class="spacer"></span><button class="btn ghost sm" data-act="logout" title="Se déconnecter">${I.out}</button></div>
     </aside>
     <div>
-      <div class="mtop"><span class="mark">${I.logo}</span><b>XGrowth</b><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
+      <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
       <main class="main"><div class="wrap" id="view"></div></main>
     </div>
     <nav class="mnav">${ROUTES.filter(x => x[0] !== "published").map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
@@ -272,7 +273,7 @@ function vHome(v) {
   const hello = hour < 6 ? "Bonne nuit" : hour < 18 ? "Bonjour" : "Bonsoir";
   const next = planned[0];
   const drafts = S.posts.filter(p => p.status === "draft").slice(-3).reverse();
-  v.innerHTML = `<div class="head"><div><h1>${hello}${who() ? " " + esc(who()) : ""} 👋</h1><p>${c.queue ? `<b>${c.queue}</b> brouillon${c.queue > 1 ? "s" : ""} attend${c.queue > 1 ? "ent" : ""} votre validation.` : "Votre file est vide : c'est le moment de créer."}</p></div>
+  v.innerHTML = `<div class="head home-head"><div><div class="eyebrow">✦ Votre espace de croissance</div><h1>${hello}${who() ? " " + esc(who()) : ""} 👋</h1><p>${c.queue ? `<b>${c.queue}</b> brouillon${c.queue > 1 ? "s" : ""} attend${c.queue > 1 ? "ent" : ""} votre validation.` : "Votre file est vide : c'est le moment de créer."}</p></div>
       <a class="btn primary" href="#/compose">${I.spark} Créer avec l'IA</a></div>
     <div class="kpis">
       <div class="kpi hero"><div class="k">À valider</div><div class="v">${c.queue}</div><div class="s">brouillons en attente</div></div>
@@ -294,7 +295,7 @@ function sparkline(posts) {
   if (pts.length < 2) return "";
   const max = Math.max(...pts) || 1, w = 160, h = 40;
   const d = pts.map((y, i) => `${(i / (pts.length - 1)) * w},${h - (y / max) * (h - 4) - 2}`).join(" ");
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="sg" x1="0" x2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><polyline points="${d}" fill="none" stroke="url(#sg)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="sg" x1="0" x2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs><polyline points="${d}" fill="none" stroke="url(#sg)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
 function composerBox(ctx) {
@@ -402,7 +403,7 @@ function vPublished(v) {
   v.innerHTML = `<div class="head"><div><h1>Performances</h1><p>${ps.length} post${ps.length > 1 ? "s" : ""} publié${ps.length > 1 ? "s" : ""}. Les statistiques se rafraîchissent toutes les 6 h.</p></div><button class="btn sm" data-act="metrics">${I.refresh} Rafraîchir</button></div>
     <div class="kpis"><div class="kpi"><div class="k">Vues</div><div class="v">${nf(tot("views"))}</div></div><div class="kpi"><div class="k">J'aime</div><div class="v">${nf(tot("likes"))}</div></div>
       <div class="kpi"><div class="k">Reposts</div><div class="v">${nf(tot("retweets"))}</div></div><div class="kpi"><div class="k">Réponses</div><div class="v">${nf(tot("replies"))}</div></div></div>
-    ${last.length > 1 ? `<h2>Vues des derniers posts</h2><div class="card"><svg viewBox="0 0 ${last.length * 30} 120" style="width:100%;height:140px" preserveAspectRatio="none"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs>${last.map((p, i) => { const h = Math.max(2, (p.metrics.views / maxV) * 112); return `<rect x="${i * 30 + 5}" y="${120 - h}" width="20" height="${h}" rx="4" fill="url(#bg)"><title>${esc(p.text.slice(0, 80))} — ${p.metrics.views} vues</title></rect>` }).join("")}</svg></div>` : ""}
+    ${last.length > 1 ? `<h2>Vues des derniers posts</h2><div class="card"><svg viewBox="0 0 ${last.length * 30} 120" style="width:100%;height:140px" preserveAspectRatio="none"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs>${last.map((p, i) => { const h = Math.max(2, (p.metrics.views / maxV) * 112); return `<rect x="${i * 30 + 5}" y="${120 - h}" width="20" height="${h}" rx="4" fill="url(#bg)"><title>${esc(p.text.slice(0, 80))} — ${p.metrics.views} vues</title></rect>` }).join("")}</svg></div>` : ""}
     ${top.length ? `<h2>Meilleurs posts</h2>${top.map(p => tweetCard(p, "view")).join("")}` : ""}
     <h2>Historique</h2>${ps.length ? `<div class="card" style="padding:6px 8px;overflow-x:auto"><table><tr><th>Date</th><th>Post</th><th class="num">Vues</th><th class="num">♥</th><th class="num">↻</th><th class="num">Eng.</th></tr>
       ${ps.map(p => { const m = p.metrics || {}, u = tweetURL(p); return `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(p.publishedAt, { dateStyle: "short", timeStyle: "short" })}</td><td>${u ? `<a href="${u}" target="_blank" rel="noopener">` : ""}${esc(p.text.slice(0, 110))}${p.text.length > 110 ? "…" : ""}${u ? "</a>" : ""}</td><td class="num">${m.views != null ? nf(m.views) : "–"}</td><td class="num">${m.likes ?? "–"}</td><td class="num">${m.retweets ?? "–"}</td><td class="num">${m.views ? m.engagementRatePct.toFixed(1) + " %" : "–"}</td></tr>` }).join("")}</table></div>` : empty(I.chart, "Pas encore de publication", "Vos posts publiés et leurs statistiques apparaîtront ici.")}`;
@@ -619,7 +620,7 @@ const wizard = {
     const w = this.w, st = this.steps;
     const first = w.addOnly ? 2 : 0;
     $("#root").innerHTML = `<div class="overlay"><div class="ob">
-      <div class="ob-top"><span class="mark">${I.logo}</span><b>XGrowth Studio</b><div class="steps">${st.slice(first).map((_, i) => `<i class="${i + first === w.step ? "on" : i + first < w.step ? "done" : ""}"></i>`).join("")}</div></div>
+      <div class="ob-top"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><div class="steps">${st.slice(first).map((_, i) => `<i class="${i + first === w.step ? "on" : i + first < w.step ? "done" : ""}"></i>`).join("")}</div></div>
       <div id="obv"></div></div></div>`;
     this["s" + w.step]($("#obv"));
   },

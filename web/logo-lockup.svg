@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="414" height="90" viewBox="0 0 414 90" role="img" aria-label="XGrowth Studio">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#22362E"/><stop offset="1" stop-color="#15262C"/></linearGradient><linearGradient id="rise" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#83E1BB"/><stop offset="1" stop-color="#D0FB83"/></linearGradient></defs>
+<rect x="2" y="7" width="76" height="76" rx="19" fill="url(#bg)" stroke="#477762"/>
+<g transform="translate(10 15)"><path d="M19 18.5 42.5 42" stroke="#8EADA8" stroke-width="7.7" stroke-linecap="round" opacity=".64"/><path d="M18.5 45.5 45.5 18.5" stroke="#14262B" stroke-width="12.5" stroke-linecap="round"/><path d="M18.5 45.5 45.5 18.5" stroke="url(#rise)" stroke-width="7.7" stroke-linecap="round"/><path d="M34.8 18.4h10.8v10.8" stroke="#D0FB83" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+<text x="97" y="50" font-family="Avenir Next, Inter, Arial, sans-serif" font-size="39" font-weight="800" letter-spacing="-1.9" fill="#F5F8F3">XGrowth</text>
+<text x="100" y="72" font-family="Avenir Next, Inter, Arial, sans-serif" font-size="12" font-weight="800" letter-spacing="4.2" fill="#8FA7A2">S T U D I O</text>
+</svg>
