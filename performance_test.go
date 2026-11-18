@@ -789,11 +789,17 @@ func TestPerfAnalysisDue(t *testing.T) {
 	}
 }
 
-// failingAI : IA qui répond toujours une erreur.
-type failingAI struct{ calls int }
+// failingAI : IA qui répond toujours une erreur (msg, ou un texte par défaut).
+type failingAI struct {
+	calls int
+	msg   string
+}
 
 func (f *failingAI) JSON(context.Context, string, string, map[string]any, any) error {
 	f.calls++
+	if f.msg != "" {
+		return errors.New(f.msg)
+	}
 	return errors.New("IA indisponible")
 }
 
@@ -824,8 +830,10 @@ func TestPerfAnalysisDueInTick(t *testing.T) {
 	}
 
 	// une erreur de l'IA est journalisée sans interrompre le Tick ; la date
-	// ne bouge pas, l'analyse sera retentée
-	bad := &failingAI{}
+	// ne bouge pas, l'analyse sera retentée. Le message du fournisseur (ici un
+	// marqueur fictif imitant un corps de réponse HTTP) n'entre pas au journal.
+	const marker = "MARQUEUR-FICTIF-7f3a"
+	bad := &failingAI{msg: "HTTP 400 : {\"post\":\"" + marker + "\",\"compte\":\"@" + marker + "\"}"}
 	e.st.ai = func(Settings) AI { return bad }
 	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
 	before := *e.st.store.Snapshot().Settings.LastPerfAnalysisAt
@@ -837,8 +845,31 @@ func TestPerfAnalysisDueInTick(t *testing.T) {
 	if l := d.Log[len(d.Log)-1]; l.Level != "error" || !strings.HasPrefix(l.Message, "analyse des performances : ") {
 		t.Fatalf("journal : %+v", l)
 	}
+	for _, l := range d.Log {
+		if strings.Contains(l.Message, marker) {
+			t.Fatalf("message du fournisseur IA recopié au journal : %+v", l)
+		}
+	}
 	if !d.Settings.LastPerfAnalysisAt.Equal(before) {
 		t.Fatalf("LastPerfAnalysisAt modifiée malgré l'échec : %v", d.Settings.LastPerfAnalysisAt)
+	}
+}
+
+// Le journal de l'analyse automatique ne reçoit qu'une catégorie fixe.
+func TestPerfErrorKindIsFixed(t *testing.T) {
+	const marker = "MARQUEUR-FICTIF-7f3a"
+	for _, err := range []error{
+		errors.New("sortie de commande : " + marker),
+		fmt.Errorf("appel IA : %w : %s", context.DeadlineExceeded, marker),
+		fmt.Errorf("appel IA : %w : %s", context.Canceled, marker),
+	} {
+		k := perfErrorKind(err)
+		if k == "" || strings.Contains(k, marker) {
+			t.Fatalf("catégorie %q pour %v", k, err)
+		}
+	}
+	if perfErrorKind(fmt.Errorf("x : %w", context.DeadlineExceeded)) == perfErrorKind(errors.New("x")) {
+		t.Fatal("un délai dépassé doit avoir sa propre catégorie")
 	}
 }
 

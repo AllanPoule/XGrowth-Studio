@@ -469,6 +469,21 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 	return res, nil
 }
 
+// perfErrorKind ramène une erreur de l'analyse automatique à une catégorie
+// fixe pour le journal persistant. Le message d'origine n'y est jamais
+// recopié : un fournisseur IA peut y glisser le corps d'une réponse HTTP ou la
+// sortie d'une commande, donc du texte de post ou un identifiant de compte.
+func perfErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "délai dépassé"
+	case errors.Is(err, context.Canceled):
+		return "annulée"
+	default:
+		return "échec de l'appel IA ou de l'enregistrement"
+	}
+}
+
 // perfAnalysisDue : l'analyse hebdomadaire est-elle due ? Il faut qu'elle soit
 // activée, que la précédente date d'au moins perfAutoEvery (ou n'ait jamais eu
 // lieu) et qu'au moins perfAutoMinNewPosts posts aient été publiés depuis.

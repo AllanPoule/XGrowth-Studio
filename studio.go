@@ -992,7 +992,12 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		if r, err := s.AnalyzePerformance(ctx, ""); err == nil {
 			out["perf"] = r
 		} else {
-			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "analyse des performances : %v", err); return nil })
+			// catégorie fixe : le détail de l'erreur n'est pas journalisé
+			kind := perfErrorKind(err)
+			_ = s.store.Update(func(d *Data) error {
+				d.AddLog("error", "analyse des performances : %s, nouvel essai au prochain passage", kind)
+				return nil
+			})
 		}
 	}
 	return out
