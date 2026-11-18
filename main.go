@@ -23,7 +23,8 @@ import (
 	"time"
 )
 
-const version = "1.0.0"
+// Une version par pull request fusionnée (voir CHANGELOG.md).
+const version = "0.05"
 
 var pretty bool
 

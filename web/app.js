@@ -552,7 +552,7 @@ function rulesBlock() {
 
 function vSettings(v) {
   const s = S.settings, sel = S.ai?.provider;
-  v.innerHTML = `<div class="head"><div><h1>Réglages</h1><p>Votre IA, vos comptes X et vos garde-fous.</p></div><span class="small faint">v${esc(S.version)}</span></div>
+  v.innerHTML = `<div class="head"><div><h1>Réglages</h1><p>Votre IA, vos comptes X et vos garde-fous.</p></div><a class="small faint" href="${SOURCE_URL}/blob/main/CHANGELOG.md" target="_blank" rel="noopener" title="Voir les nouveautés">V${esc(S.version)} · Nouveautés</a></div>
     <h2>Intelligence artificielle</h2>
     <div class="card"><p class="muted small" style="margin-top:0">XGrowth utilise les IA déjà installées sur le serveur : votre abonnement Claude via Claude Code, votre compte ChatGPT via Codex, ou l'API. Elles tournent sans aucun outil : elles écrivent, rien d'autre.</p>
       ${providerCards(sel)}
