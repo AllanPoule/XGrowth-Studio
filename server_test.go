@@ -244,3 +244,23 @@ func TestWatchSeenIsStoredServerSide(t *testing.T) {
 		t.Fatal("POST /api/settings ne doit pas effacer watchSeenAt")
 	}
 }
+
+func TestStateOfEmptyStudioHasNoNullLists(t *testing.T) {
+	t.Setenv("XGROWTH_HOME", t.TempDir())
+	store, err := OpenStore(homeDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(buildHandler(NewStudio(store), ServeOptions{NoAuth: true}))
+	defer srv.Close()
+	st, m := call(t, &http.Client{}, "GET", srv.URL+"/api/state", "")
+	if st != 200 {
+		t.Fatalf("%d", st)
+	}
+	data := m["data"].(map[string]any)
+	for _, k := range []string{"accounts", "posts", "items", "learnings", "rules", "log", "calendar"} {
+		if _, ok := data[k].([]any); !ok {
+			t.Errorf("%s doit être une liste (même vide), reçu %#v", k, data[k])
+		}
+	}
+}

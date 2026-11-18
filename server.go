@@ -97,11 +97,13 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 				mix[a.Name] = ComputeTypeMix(d, a.Name, types, time.Now())
 			}
 		}
+		// Les listes vides partent en [] et jamais en null : l'interface les
+		// parcourt sans test (un studio sans aucun post plantait à l'affichage).
 		reply(w, map[string]any{
-			"accounts": d.Accounts, "posts": d.Posts, "items": items, "settings": d.Settings,
-			"learnings": d.Learnings, "rules": sortedRules(d.RuleProposals), "typeMix": mix,
+			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
+			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix,
 			"defaults": map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
-			"log":      logs, "calendar": calendar(d, 21, time.Now()),
+			"log":      orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
@@ -384,4 +386,12 @@ func AgentxConnect(ctx context.Context, name, authToken, ct0 string) (*Profile, 
 		return nil, fmt.Errorf("session enregistrée mais X la refuse : %w", err)
 	}
 	return p, nil
+}
+
+// orEmpty remplace une liste nil par une liste vide (sérialisée en [] et non null).
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }

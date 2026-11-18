@@ -68,6 +68,11 @@ async function api(path, body) {
   try { e = await r.json() } catch { throw new Error("réponse invalide du serveur (" + r.status + ")") }
   if (r.status === 401 && !path.startsWith("/api/auth/")) { boot(); throw new Error("session expirée") }
   if (!e.ok) { const err = new Error(e.error?.message || "erreur"); err.data = e.data; throw err }
+  if (path === "/api/state" && e.data) {
+    // toujours des listes, même vides : l'interface les parcourt sans test
+    for (const k of ["accounts", "posts", "items", "learnings", "rules", "log", "calendar"]) if (!Array.isArray(e.data[k])) e.data[k] = [];
+    e.data.settings ||= {};
+  }
   return e.data;
 }
 
@@ -436,6 +441,10 @@ function sortItems(items) {
   return items.slice().sort((a, b) => itemRank(a) - itemRank(b) || (b.score || 0) - (a.score || 0) || new Date(b.fetchedAt) - new Date(a.fetchedAt));
 }
 
+// Répondre et Citer n'ont de sens que pour un post X (identifiant numérique),
+// pas pour une entrée de changelog, un dépôt GitHub ou une news.
+const isXPost = i => /^\d{1,25}$/.test(String(i.tweetId || "")) && /(^|\/\/)(x|twitter)\.com\//.test(String(i.url || "https://x.com/"));
+
 function itemCard(i) {
   const src = i.source.replace("watch:user:", "@").replace("watch:search:", "🔎 ").replace("bookmarks", "signet").replace("manual", "ajout manuel");
   const sugg = i.suggestion === "keep" ? `<span class="pill ok" title="Suggestion de l'IA">${I.spark.replace("<svg", '<svg style="width:12px;height:12px"')} Suggéré · ${i.score}/10</span>`
@@ -450,8 +459,8 @@ function itemCard(i) {
     <div class="ic-actions">
       <button class="btn primary sm" data-act="item-draft" data-id="${i.id}" data-acc="${esc(i.account)}">${I.spark} En faire un post</button>
       <div class="ic-row">
-        <button class="btn sm ghost" data-act="item-reply" data-tid="${i.tweetId}" data-acc="${esc(i.account)}" title="Rédiger une réponse">${I.reply} Répondre</button>
-        <button class="btn sm ghost" data-act="item-quote" data-tid="${i.tweetId}" data-acc="${esc(i.account)}" title="Rédiger une citation">${I.quote} Citer</button>
+        ${isXPost(i) ? `<button class="btn sm ghost" data-act="item-reply" data-tid="${esc(i.tweetId)}" data-acc="${esc(i.account)}" title="Rédiger une réponse">${I.reply} Répondre</button>
+        <button class="btn sm ghost" data-act="item-quote" data-tid="${esc(i.tweetId)}" data-acc="${esc(i.account)}" title="Rédiger une citation">${I.quote} Citer</button>` : ""}
         <span class="spacer"></span>
         ${i.status !== "kept" ? `<button class="btn sm ghost" data-act="item-st" data-st="kept" data-id="${i.id}">Garder</button>` : ""}
         ${i.status !== "ignored" ? `<button class="btn sm ghost" data-act="item-st" data-st="ignored" data-id="${i.id}">Ignorer</button>` : `<button class="btn sm ghost" data-act="item-st" data-st="pending" data-id="${i.id}">Remettre à trier</button>`}

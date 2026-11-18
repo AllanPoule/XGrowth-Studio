@@ -30,6 +30,10 @@ dernière version.
 - Les contenus de veille partaient seuls dans « Ignorés » dès qu'on ouvrait le studio. Au premier démarrage, la
   migration des données (version 2) remet dans « À trier » ceux que l'IA y avait placés.
 - Un binaire macOS de 20 Mo (`XGrowth-Studio`), commité par erreur en V0.04, est retiré du dépôt et ignoré.
+- Un studio configuré mais sans aucun post plantait à l'affichage : l'état renvoie désormais des listes vides au
+  lieu de `null`.
+- Répondre et Citer n'apparaissent dans la veille que pour un vrai post X (pas pour un changelog, un dépôt GitHub
+  ou une news).
 
 ## V0.04 — 18 novembre 2026
 
