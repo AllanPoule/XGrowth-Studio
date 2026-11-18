@@ -223,3 +223,44 @@ func (j *cookieJar) SetCookies(_ *url.URL, cs []*http.Cookie) {
 	}
 }
 func (j *cookieJar) Cookies(*url.URL) []*http.Cookie { return j.cookies }
+
+func TestWatchSeenIsStoredServerSide(t *testing.T) {
+	t.Setenv("XGROWTH_HOME", t.TempDir())
+	store, err := OpenStore(homeDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(buildHandler(NewStudio(store), ServeOptions{NoAuth: true}))
+	defer srv.Close()
+	if st, m := call(t, &http.Client{}, "POST", srv.URL+"/api/watch/seen", ""); st != 200 {
+		t.Fatalf("%d %v", st, m)
+	}
+	if store.Snapshot().Settings.WatchSeenAt == nil {
+		t.Fatal("la dernière visite de la veille doit être enregistrée côté serveur")
+	}
+	// un enregistrement des réglages ne doit pas l'effacer
+	call(t, &http.Client{}, "POST", srv.URL+"/api/settings", `{"minGapMinutes":45}`)
+	if store.Snapshot().Settings.WatchSeenAt == nil {
+		t.Fatal("POST /api/settings ne doit pas effacer watchSeenAt")
+	}
+}
+
+func TestStateOfEmptyStudioHasNoNullLists(t *testing.T) {
+	t.Setenv("XGROWTH_HOME", t.TempDir())
+	store, err := OpenStore(homeDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(buildHandler(NewStudio(store), ServeOptions{NoAuth: true}))
+	defer srv.Close()
+	st, m := call(t, &http.Client{}, "GET", srv.URL+"/api/state", "")
+	if st != 200 {
+		t.Fatalf("%d", st)
+	}
+	data := m["data"].(map[string]any)
+	for _, k := range []string{"accounts", "posts", "items", "learnings", "rules", "log", "calendar"} {
+		if _, ok := data[k].([]any); !ok {
+			t.Errorf("%s doit être une liste (même vide), reçu %#v", k, data[k])
+		}
+	}
+}

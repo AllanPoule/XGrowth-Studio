@@ -34,6 +34,8 @@ const I = {
   bulb: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg>',
   out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  auto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor"/></svg>',
   moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
   arrowR: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   arrowL: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
@@ -66,6 +68,11 @@ async function api(path, body) {
   try { e = await r.json() } catch { throw new Error("réponse invalide du serveur (" + r.status + ")") }
   if (r.status === 401 && !path.startsWith("/api/auth/")) { boot(); throw new Error("session expirée") }
   if (!e.ok) { const err = new Error(e.error?.message || "erreur"); err.data = e.data; throw err }
+  if (path === "/api/state" && e.data) {
+    // toujours des listes, même vides : l'interface les parcourt sans test
+    for (const k of ["accounts", "posts", "items", "learnings", "rules", "log", "calendar"]) if (!Array.isArray(e.data[k])) e.data[k] = [];
+    e.data.settings ||= {};
+  }
   return e.data;
 }
 
@@ -142,11 +149,22 @@ async function boot() {
   }
 }
 
+// Thème : « auto » (défaut) suit le système, « light » et « dark » le forcent.
+const THEMES = ["auto", "light", "dark"];
+const THEME_LABEL = { auto: "Automatique (système)", light: "Clair", dark: "Sombre" };
+const systemLight = window.matchMedia ? matchMedia("(prefers-color-scheme: light)") : null;
+const themePref = () => { const t = store.get("theme", "auto"); return THEMES.includes(t) ? t : "auto" };
+const themeIcon = () => ({ auto: I.auto, light: I.sun, dark: I.moon }[themePref()]);
+
 function applyTheme() {
-  const t = store.get("theme", "dark");
+  const pref = themePref();
+  const t = pref === "auto" ? (systemLight?.matches ? "light" : "dark") : pref;
   document.documentElement.dataset.theme = t;
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#f3f5f1" : "#0b1015");
+  const b = document.querySelector('[data-act="theme"]');
+  if (b) { b.innerHTML = themeIcon(); b.title = `Thème : ${THEME_LABEL[pref]}`; b.setAttribute("aria-label", b.title) }
 }
+systemLight?.addEventListener?.("change", () => { if (themePref() === "auto") applyTheme() });
 
 // ------------------------------------------------------------------ écrans d'accès
 function authShell(inner) {
@@ -198,6 +216,7 @@ function render() {
   if (!S) return;
   dirty = false;
   const r = route(), c = counts();
+  if (r !== "watch") watchBaseline = undefined;
   const prov = S.ai?.provider, pinfo = (P || []).find(p => p.id === prov);
   const navItem = ([k, l, ic], cls = "") => `<a href="#/${k}" class="${k === r ? "on" : ""} ${cls}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`;
   $("#root").innerHTML = `<div class="app">
@@ -209,7 +228,7 @@ function render() {
         <span class="dot ${pinfo && !pinfo.available ? "off" : ""}"></span>
         <span><b>${esc(providerName(prov))}</b><small>${S.ai?.model ? esc(S.ai.model) : "IA du studio"}</small></span>
       </button>
-      <div class="sidefoot"><button class="btn ghost sm" data-act="theme" title="Thème">${I.moon}</button><a class="btn ghost sm" href="${SOURCE_URL}" target="_blank" rel="noopener" title="Code source (AGPL-3.0)">Code source</a><span class="spacer"></span><button class="btn ghost sm" data-act="logout" title="Se déconnecter">${I.out}</button></div>
+      <div class="sidefoot"><button class="btn ghost sm" data-act="theme" title="Thème : ${THEME_LABEL[themePref()]}" aria-label="Thème : ${THEME_LABEL[themePref()]}">${themeIcon()}</button><a class="btn ghost sm" href="${SOURCE_URL}" target="_blank" rel="noopener" title="Code source (AGPL-3.0)">Code source</a><span class="spacer"></span><button class="btn ghost sm" data-act="logout" title="Se déconnecter">${I.out}</button></div>
     </aside>
     <div>
       <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
@@ -384,12 +403,24 @@ function vCalendar(v) {
     <h2>File de publication</h2>${planned.length ? planned.map(p => tweetCard(p, "planned")).join("") : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
 }
 
+// « New » : contenus récupérés depuis la visite précédente de la veille. La
+// référence est figée à l'entrée sur la page (les badges restent pendant la
+// visite, même après un rafraîchissement), puis la visite est enregistrée.
+let watchBaseline;
+const isNew = i => watchBaseline === null || (watchBaseline && new Date(i.fetchedAt) > new Date(watchBaseline));
+
 function vWatch(v) {
+  if (watchBaseline === undefined) {
+    watchBaseline = S.settings.watchSeenAt || null;
+    api("/api/watch/seen", {}).then(r => { if (S) S.settings.watchSeenAt = r.watchSeenAt }).catch(() => {});
+  }
   const f = store.get("wf", "pending");
-  const items = (S.items || []).filter(i => f === "all" || i.status === f).slice().reverse();
+  const fresh = (S.items || []).filter(i => i.status === "pending" && isNew(i)).length;
+  const filtered = (S.items || []).filter(i => f === "all" || i.status === f);
+  const items = f === "pending" ? sortItems(filtered) : filtered.slice().reverse();
   const targets = S.accounts.flatMap(a => (a.watch || []).map(w => ({ ...w, account: a.name })));
   const lab = { pending: "À trier", kept: "Gardés", drafted: "Rédigés", ignored: "Ignorés", all: "Tout" };
-  v.innerHTML = `<div class="head"><div><h1>Veille</h1><p>Les comptes et recherches que vous suivez. L'IA trie, vous choisissez quoi en faire.</p></div>
+  v.innerHTML = `<div class="head"><div><h1>Veille${fresh ? ` <span class="pill new" title="Récupérés depuis votre dernière visite">${fresh} nouveau${fresh > 1 ? "x" : ""}</span>` : ""}</h1><p>Les comptes et recherches que vous suivez. L'IA trie, vous choisissez quoi en faire.</p></div>
     <div class="row"><button class="btn sm" data-act="fetch">${I.refresh} Actualiser</button><button class="btn sm" data-act="bookmarks">Importer mes signets</button><button class="btn primary sm" data-act="triage">${I.spark} Trier avec l'IA</button></div></div>
     <div class="card"><div class="row">${accountSelect("wacc")}
       <div class="seg" id="wk"><button data-k="user" class="on">Compte</button><button data-k="search">Recherche</button></div>
@@ -398,22 +429,42 @@ function vWatch(v) {
       ${targets.length ? `<div class="chips" style="margin-top:12px">${targets.map(t => `<span class="chip">${t.kind === "user" ? "@" : "🔎 "}${esc(t.value)} <a href="#" data-act="watch-rm" data-id="${t.id}" title="Retirer" style="color:var(--muted);margin-left:4px">✕</a></span>`).join("")}</div>` : `<p class="hint">Suivez des comptes inspirants, des concurrents ou une recherche X (ex. <code>agents IA lang:fr -is:retweet</code>).</p>`}
       <div class="row" style="margin-top:12px"><input id="iref" placeholder="Ou ajoutez un post précis : lien x.com" style="flex:1;width:auto"><button class="btn sm" data-act="item-add">Ajouter</button></div></div>
     <div class="row" style="margin:18px 0 12px"><div class="seg">${Object.entries(lab).map(([k, l]) => `<button data-act="wf" data-f="${k}" class="${k === f ? "on" : ""}">${l}</button>`).join("")}</div></div>
-    ${items.length ? items.slice(0, 100).map(itemCard).join("") : empty(I.radar, "Rien ici", f === "pending" ? "Actualisez la veille ou ajoutez des cibles." : "Aucun contenu dans cette catégorie.")}`;
+    ${f === "pending" && items.some(i => i.suggestion) ? `<p class="small muted" style="margin:-4px 0 12px">L'IA classe les contenus et signale ceux qui méritent un post. Rien n'est ignoré sans votre clic.</p>` : ""}
+    ${items.length ? `<div class="items-grid">${items.slice(0, 120).map(itemCard).join("")}</div>` : empty(I.radar, "Rien ici", f === "pending" ? "Actualisez la veille ou ajoutez des cibles." : "Aucun contenu dans cette catégorie.")}`;
   $$("#wk button", v).forEach(b => b.onclick = () => { $$("#wk button", v).forEach(x => x.classList.toggle("on", x === b)); $("#wv", v).placeholder = b.dataset.k === "user" ? "@handle à suivre" : "Requête X : agents IA lang:fr -is:retweet" });
 }
 
+// Ordre « à trier » : suggérés par l'IA (meilleur score d'abord), puis pas encore
+// notés (plus récents d'abord), puis jugés peu pertinents.
+function itemRank(i) { return i.suggestion === "keep" ? 0 : i.suggestion === "skip" ? 2 : 1 }
+function sortItems(items) {
+  return items.slice().sort((a, b) => itemRank(a) - itemRank(b) || (b.score || 0) - (a.score || 0) || new Date(b.fetchedAt) - new Date(a.fetchedAt));
+}
+
+// Répondre et Citer n'ont de sens que pour un post X (identifiant numérique),
+// pas pour une entrée de changelog, un dépôt GitHub ou une news.
+const isXPost = i => /^\d{1,25}$/.test(String(i.tweetId || "")) && /(^|\/\/)(x|twitter)\.com\//.test(String(i.url || "https://x.com/"));
+
 function itemCard(i) {
-  const score = i.score ? `<span class="pill ${i.score >= S.settings.triageMinScore ? "ok" : ""}">${i.score}/10</span>` : "";
-  return `<article class="tweet"><div class="av">${esc((i.author || "?")[0])}</div><div style="min-width:0">
-    <div class="tw-head"><b>@${esc(i.author)}</b><span class="h small">· ${rel(i.fetchedAt)} · ${esc(i.source.replace("watch:user:", "@").replace("watch:search:", "🔎 "))}</span><span class="spacer"></span>${score}</div>
-    <div class="tw-text">${esc(i.text)}</div>
-    <div class="tw-meta small muted">♥ ${nf(i.likes)} · 👁 ${nf(i.views)} · <a href="${esc(i.url)}" target="_blank" rel="noopener">Ouvrir</a></div>
-    ${i.reason ? `<div class="tw-why">${I.bulb}<span>${esc(i.reason)}${i.angle ? ` — <b>angle :</b> ${esc(i.angle)}` : ""}</span></div>` : ""}
-    <div class="tw-actions"><button class="btn primary sm" data-act="item-draft" data-id="${i.id}" data-acc="${esc(i.account)}">${I.spark} En faire un post</button>
-      <button class="btn sm" data-act="item-reply" data-tid="${i.tweetId}" data-acc="${esc(i.account)}">${I.reply} Répondre</button>
-      <button class="btn sm" data-act="item-quote" data-tid="${i.tweetId}" data-acc="${esc(i.account)}">${I.quote} Citer</button><span class="spacer"></span>
-      ${i.status !== "kept" ? `<button class="btn sm ghost" data-act="item-st" data-st="kept" data-id="${i.id}">Garder</button>` : ""}
-      ${i.status !== "ignored" ? `<button class="btn sm ghost" data-act="item-st" data-st="ignored" data-id="${i.id}">Ignorer</button>` : ""}</div></div></article>`;
+  const src = i.source.replace("watch:user:", "@").replace("watch:search:", "🔎 ").replace("bookmarks", "signet").replace("manual", "ajout manuel");
+  const sugg = i.suggestion === "keep" ? `<span class="pill ok" title="Suggestion de l'IA">${I.spark.replace("<svg", '<svg style="width:12px;height:12px"')} Suggéré · ${i.score}/10</span>`
+    : i.suggestion === "skip" ? `<span class="pill" title="Suggestion de l'IA : rien n'est ignoré sans vous">Peu pertinent · ${i.score}/10</span>` : "";
+  const st = { kept: '<span class="pill accent">Gardé</span>', drafted: '<span class="pill ok">Rédigé</span>', ignored: '<span class="pill bad">Ignoré</span>' }[i.status] || "";
+  return `<article class="card icard ${i.suggestion === "skip" && i.status === "pending" ? "dim" : ""}">
+    <div class="ic-head"><div class="av sm">${esc((i.author || "?")[0])}</div><div class="ic-who"><b>@${esc(i.author)}</b><span class="small muted">${rel(i.fetchedAt)} · ${esc(src)}</span></div>${isNew(i) ? `<span class="pill new" title="Récupéré depuis votre dernière visite">New</span>` : ""}</div>
+    ${sugg || st ? `<div class="ic-pills">${sugg}${st}</div>` : ""}
+    <div class="ic-text">${esc(i.text)}</div>
+    <div class="small muted">♥ ${nf(i.likes)} · 👁 ${nf(i.views)} · <a href="${esc(i.url)}" target="_blank" rel="noopener">Ouvrir sur X</a></div>
+    ${i.reason ? `<div class="tw-why ic-why">${I.bulb}<span>${esc(i.reason)}${i.angle ? ` — <b>angle :</b> ${esc(i.angle)}` : ""}</span></div>` : ""}
+    <div class="ic-actions">
+      <button class="btn primary sm" data-act="item-draft" data-id="${i.id}" data-acc="${esc(i.account)}">${I.spark} En faire un post</button>
+      <div class="ic-row">
+        ${isXPost(i) ? `<button class="btn sm ghost" data-act="item-reply" data-tid="${esc(i.tweetId)}" data-acc="${esc(i.account)}" title="Rédiger une réponse">${I.reply} Répondre</button>
+        <button class="btn sm ghost" data-act="item-quote" data-tid="${esc(i.tweetId)}" data-acc="${esc(i.account)}" title="Rédiger une citation">${I.quote} Citer</button>` : ""}
+        <span class="spacer"></span>
+        ${i.status !== "kept" ? `<button class="btn sm ghost" data-act="item-st" data-st="kept" data-id="${i.id}">Garder</button>` : ""}
+        ${i.status !== "ignored" ? `<button class="btn sm ghost" data-act="item-st" data-st="ignored" data-id="${i.id}">Ignorer</button>` : `<button class="btn sm ghost" data-act="item-st" data-st="pending" data-id="${i.id}">Remettre à trier</button>`}
+      </div></div></article>`;
 }
 
 function vPublished(v) {
@@ -510,7 +561,7 @@ function rulesBlock() {
 
 function vSettings(v) {
   const s = S.settings, sel = S.ai?.provider;
-  v.innerHTML = `<div class="head"><div><h1>Réglages</h1><p>Votre IA, vos comptes X et vos garde-fous.</p></div><span class="small faint">v${esc(S.version)}</span></div>
+  v.innerHTML = `<div class="head"><div><h1>Réglages</h1><p>Votre IA, vos comptes X et vos garde-fous.</p></div><a class="small faint" href="${SOURCE_URL}/blob/main/CHANGELOG.md" target="_blank" rel="noopener" title="Voir les nouveautés">V${esc(S.version)} · Nouveautés</a></div>
     <h2>Intelligence artificielle</h2>
     <div class="card"><p class="muted small" style="margin-top:0">XGrowth utilise les IA déjà installées sur le serveur : votre abonnement Claude via Claude Code, votre compte ChatGPT via Codex, ou l'API. Elles tournent sans aucun outil : elles écrivent, rien d'autre.</p>
       ${providerCards(sel)}
@@ -603,7 +654,10 @@ function readAccountForm(card, base) {
 
 // ------------------------------------------------------------------ actions (délégation)
 const actions = {
-  async theme() { store.set("theme", store.get("theme", "dark") === "dark" ? "light" : "dark"); applyTheme() },
+  async theme() {
+    const next = THEMES[(THEMES.indexOf(themePref()) + 1) % THEMES.length];
+    store.set("theme", next); applyTheme(); toast(`Thème : ${THEME_LABEL[next]}`);
+  },
   async logout() { await api("/api/auth/logout", {}); S = null; boot() },
   async generate(b) {
     const ctx = b.dataset.ctx, acc = $("#acc-" + ctx).value, topic = $("#brief-" + ctx).value, n = +store.get("n", 3), type = $("#type-" + ctx)?.value || "";
@@ -641,7 +695,7 @@ const actions = {
   async manual(b) { await run(b, () => api("/api/write", { account: store.get("acc", S.accounts[0]?.name), text: $("#manual").value, media: $("#media").value }), "Ajouté à la file") },
   async fetch(b) { await run(b, () => api("/api/fetch", {}), r => r.length ? r.map(x => x.error ? `${x.source} : ${x.error}` : `${x.source.replace("watch:", "")} +${x.added}`).join(" · ") : "Aucune cible suivie", { wait: "Lecture…" }) },
   async bookmarks(b) { await run(b, () => api("/api/bookmarks", { account: $("#wacc").value, n: 20 }), r => `${r.added} signet(s) importé(s)`) },
-  async triage(b) { await run(b, () => api("/api/triage", { account: $("#wacc").value }), r => r.map(x => x.error || `${x.triaged} triés, ${x.kept} gardés`).join(" · ") || "Rien à trier", { wait: "Tri…" }) },
+  async triage(b) { await run(b, () => api("/api/triage", { account: $("#wacc").value }), r => r.map(x => x.error || (x.triaged ? `${x.triaged} contenu(s) noté(s), ${x.kept} suggéré(s)` : "Tout est déjà noté")).join(" · ") || "Rien à trier", { wait: "Tri…" }) },
   async "watch-add"(b) {
     const kind = $("#wk .on").dataset.k;
     await run(b, () => api("/api/watch", { account: $("#wacc").value, kind, value: $("#wv").value, every: +$("#we").value }), "Ajouté à la veille");
