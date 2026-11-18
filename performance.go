@@ -46,6 +46,13 @@ const (
 	// Une règle tient en une phrase applicable à tout brouillon : 240 runes
 	// suffisent et bornent la place prise dans le prompt.
 	perfMaxRuleChars = 240
+	// Analyse automatique au plus une fois par semaine, comme la synthèse des
+	// retours : assez souvent pour suivre le compte, assez peu pour que chaque
+	// analyse porte sur des posts nouveaux et coûte peu d'appels IA.
+	perfAutoEvery = 7 * 24 * time.Hour
+	// Pas d'analyse automatique sans au moins 5 posts publiés depuis la
+	// précédente : en dessous, le résumé change trop peu pour justifier un appel.
+	perfAutoMinNewPosts = 5
 )
 
 // PerfSignal : un groupe de posts dont le taux d'engagement médian s'écarte
@@ -460,4 +467,24 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 		return nil, err
 	}
 	return res, nil
+}
+
+// perfAnalysisDue : l'analyse hebdomadaire est-elle due ? Il faut qu'elle soit
+// activée, que la précédente date d'au moins perfAutoEvery (ou n'ait jamais eu
+// lieu) et qu'au moins perfAutoMinNewPosts posts aient été publiés depuis.
+func perfAnalysisDue(d *Data, now time.Time) bool {
+	if !d.Settings.AutoPerfAnalysis {
+		return false
+	}
+	last := d.Settings.LastPerfAnalysisAt
+	if last != nil && now.Sub(*last) < perfAutoEvery {
+		return false
+	}
+	n := 0
+	for _, p := range d.Posts {
+		if p.Status == StatusPublished && p.PublishedAt != nil && (last == nil || p.PublishedAt.After(*last)) {
+			n++
+		}
+	}
+	return n >= perfAutoMinNewPosts
 }

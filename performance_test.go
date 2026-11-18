@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -728,5 +732,298 @@ func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
 	got := e.st.store.Snapshot().Settings.LastPerfAnalysisAt
 	if got == nil || !got.Equal(late) {
 		t.Errorf("LastPerfAnalysisAt = %v, attendu %v (pas %v)", got, late, early)
+	}
+}
+
+// ---------------------------------------------------------------- planificateur, API et CLI (LOT1-T4)
+
+// recentPerf : rend les 10 posts de perfFixture « récents » pour le
+// planificateur. Les 5 premiers passent à 3 jours de la date courante, les
+// autres restent à 10 jours ; tous les relevés sont du jour, pour que
+// RefreshMetrics (appelé par Tick avant l'analyse) ne les remplace pas.
+func recentPerf(t *testing.T, e *env, lastAnalysis time.Time) {
+	t.Helper()
+	if err := e.st.store.Update(func(d *Data) error {
+		recent := e.now.Add(-3 * 24 * time.Hour)
+		n := 0
+		for _, p := range d.Posts {
+			if n < 5 {
+				p.PublishedAt = &recent
+				n++
+			}
+			p.Metrics.UpdatedAt = e.now
+		}
+		d.Settings.LastPerfAnalysisAt = &lastAnalysis
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPerfAnalysisDue(t *testing.T) {
+	e := newEnv(t)
+	perfFixture(t, e, "main") // 10 posts publiés il y a 10 jours
+	due := func() bool { return perfAnalysisDue(e.st.store.Snapshot(), e.now) }
+	if due() {
+		t.Fatal("désactivée par défaut")
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	if !due() {
+		t.Fatal("jamais faite, 10 posts publiés : due")
+	}
+	recentPerf(t, e, e.now.Add(-7*24*time.Hour)) // 5 posts publiés depuis, il y a 7 jours pile
+	if !due() {
+		t.Fatal("7 jours et 5 posts depuis : due")
+	}
+	recentPerf(t, e, e.now.Add(-7*24*time.Hour+time.Minute))
+	if due() {
+		t.Fatal("moins de 7 jours : pas due")
+	}
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Posts[0].Status = StatusFailed // plus que 4 posts publiés depuis
+		return nil
+	})
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	if due() {
+		t.Fatal("4 posts publiés depuis la dernière analyse : pas due")
+	}
+}
+
+// failingAI : IA qui répond toujours une erreur.
+type failingAI struct{ calls int }
+
+func (f *failingAI) JSON(context.Context, string, string, map[string]any, any) error {
+	f.calls++
+	return errors.New("IA indisponible")
+}
+
+// Test 7 du §4.3.1.
+func TestPerfAnalysisDueInTick(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-7*24*time.Hour))
+
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || e.ai.calls != 0 {
+		t.Fatalf("analyse désactivée : %d appel(s) IA dans Tick", e.ai.calls)
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	out := e.st.Tick(ctx)
+	res, ok := out["perf"].(*PerfResult)
+	if !ok || e.ai.calls != 1 {
+		t.Fatalf("activée, 5 posts récents, dernière analyse à 7 jours : %d appel(s) IA, sortie %v", e.ai.calls, out)
+	}
+	if len(res.Accounts) != 1 || res.Accounts[0].Eligible != 10 || len(res.Accounts[0].Proposed) == 0 {
+		t.Fatalf("résultat : %+v", res.Accounts)
+	}
+	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; last == nil || !last.Equal(e.now) {
+		t.Fatalf("LastPerfAnalysisAt = %v", last)
+	}
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || e.ai.calls != 1 {
+		t.Fatalf("second Tick immédiat : %d appel(s) IA, attendu 1", e.ai.calls)
+	}
+
+	// une erreur de l'IA est journalisée sans interrompre le Tick ; la date
+	// ne bouge pas, l'analyse sera retentée
+	bad := &failingAI{}
+	e.st.ai = func(Settings) AI { return bad }
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	before := *e.st.store.Snapshot().Settings.LastPerfAnalysisAt
+	out = e.st.Tick(ctx)
+	if _, ok := out["perf"]; ok || bad.calls != 1 || out["at"] == nil {
+		t.Fatalf("erreur IA : sortie %v, %d appel(s)", out, bad.calls)
+	}
+	d := e.st.store.Snapshot()
+	if l := d.Log[len(d.Log)-1]; l.Level != "error" || !strings.HasPrefix(l.Message, "analyse des performances : ") {
+		t.Fatalf("journal : %+v", l)
+	}
+	if !d.Settings.LastPerfAnalysisAt.Equal(before) {
+		t.Fatalf("LastPerfAnalysisAt modifiée malgré l'échec : %v", d.Settings.LastPerfAnalysisAt)
+	}
+}
+
+// Test 10 du §4.3.1.
+func TestAPIAnalyzeAndState(t *testing.T) {
+	srv, e := tuningServer(t)
+	c := &http.Client{}
+	perfFixture(t, e, "main")
+
+	st, m := call(t, c, "POST", srv.URL+"/api/rules/analyze", `{"account":"main"}`)
+	if st != 200 || e.ai.calls != 1 {
+		t.Fatalf("analyse : %d %v (%d appel(s) IA)", st, m, e.ai.calls)
+	}
+	accounts := m["data"].(map[string]any)["accounts"].([]any)
+	acc := accounts[0].(map[string]any)
+	proposed := acc["proposed"].([]any)
+	if len(accounts) != 1 || acc["account"] != "main" || acc["eligible"].(float64) != 10 || acc["skipped"] != nil || len(proposed) != 2 {
+		t.Fatalf("résultat de l'analyse : %v", acc)
+	}
+	stored := perfRules(e.st.store.Snapshot())
+	if len(stored) != 2 {
+		t.Fatalf("règles enregistrées : %+v", stored)
+	}
+	for i, p := range proposed {
+		r := p.(map[string]any)
+		if r["id"] != stored[i].ID || r["source"] != RuleSourcePerformance || r["status"] != RuleProposed || r["basis"] != stored[i].Basis {
+			t.Fatalf("proposition %d : %v, enregistrée %+v", i, r, stored[i])
+		}
+	}
+
+	// sans corps : tous les comptes ; compte inconnu : erreur
+	if st, m := call(t, c, "POST", srv.URL+"/api/rules/analyze", ""); st != 200 || len(m["data"].(map[string]any)["accounts"].([]any)) != 1 {
+		t.Fatalf("analyse sans corps : %d %v", st, m)
+	}
+	calls := e.ai.calls
+	if st, _ := call(t, c, "POST", srv.URL+"/api/rules/analyze", `{"account":"inconnu"}`); st != 400 || e.ai.calls != calls {
+		t.Fatalf("compte inconnu : %d", st)
+	}
+
+	// l'état expose le résumé des performances, sans appel IA
+	_, m = call(t, c, "GET", srv.URL+"/api/state", "")
+	perf, ok := m["data"].(map[string]any)["perf"].(map[string]any)
+	if !ok || e.ai.calls != calls {
+		t.Fatalf("état : perf absent ou appel IA (%d)", e.ai.calls)
+	}
+	dg := e.digest()
+	pm := perf["main"].(map[string]any)
+	if pm["eligible"].(float64) != float64(dg.Eligible) || pm["baseline"].(float64) != dg.Baseline ||
+		len(pm["signals"].([]any)) != len(dg.Signals) || len(dg.Signals) != 2 {
+		t.Fatalf("perf.main = %v, attendu %+v", pm, dg)
+	}
+
+	// accepter une règle de performance par la route existante
+	rule := stored[0]
+	if st, m := call(t, c, "POST", srv.URL+"/api/rules/"+rule.ID+"/accept", `{}`); st != 200 || m["data"].(map[string]any)["status"] != RuleAccepted {
+		t.Fatalf("acceptation : %d %v", st, m)
+	}
+	d := e.st.store.Snapshot()
+	sys := systemPrompt(d.Account("main"), d)
+	i, j := strings.Index(sys, "<regles>"), strings.Index(sys, "</regles>")
+	if i < 0 || j < i || !strings.Contains(sys[i:j], "- "+rule.Text+"\n") {
+		t.Fatalf("la règle acceptée doit figurer dans <regles> : %q", sys)
+	}
+	if strings.Contains(sys, stored[1].Text) {
+		t.Fatal("une règle seulement proposée ne doit pas entrer dans le prompt")
+	}
+}
+
+// Critère 4 du ticket : le client ne peut pas écraser LastPerfAnalysisAt.
+func TestAPISettingsKeepLastPerfAnalysisAt(t *testing.T) {
+	srv, e := tuningServer(t)
+	c := &http.Client{}
+	body := `{"autoPerfAnalysis":true,"lastPerfAnalysisAt":"2020-01-01T00:00:00Z"}`
+	if st, m := call(t, c, "POST", srv.URL+"/api/settings", body); st != 200 {
+		t.Fatalf("réglages refusés : %v", m)
+	}
+	if s := e.st.store.Snapshot().Settings; !s.AutoPerfAnalysis || s.LastPerfAnalysisAt != nil {
+		t.Fatalf("jamais analysé : %v / %v", s.AutoPerfAnalysis, s.LastPerfAnalysisAt)
+	}
+	// une date déjà enregistrée n'est pas écrasée non plus (la fusion JSON
+	// écrivait dans la valeur pointée) ; même garantie pour LastSynthesisAt
+	last := e.now.Add(-time.Hour)
+	_ = e.st.store.Update(func(d *Data) error {
+		perf, synth := last, last
+		d.Settings.LastPerfAnalysisAt, d.Settings.LastSynthesisAt = &perf, &synth
+		return nil
+	})
+	body = `{"lastPerfAnalysisAt":"2020-01-01T00:00:00Z","lastSynthesisAt":"2020-01-01T00:00:00Z"}`
+	if st, m := call(t, c, "POST", srv.URL+"/api/settings", body); st != 200 {
+		t.Fatalf("réglages refusés : %v", m)
+	}
+	s := e.st.store.Snapshot().Settings
+	if s.LastPerfAnalysisAt == nil || !s.LastPerfAnalysisAt.Equal(last) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", s.LastPerfAnalysisAt, last)
+	}
+	if s.LastSynthesisAt == nil || !s.LastSynthesisAt.Equal(last) {
+		t.Fatalf("LastSynthesisAt = %v, attendu %v", s.LastSynthesisAt, last)
+	}
+}
+
+// cliExit : code de sortie d'une commande, remonté par panique dans les tests.
+type cliExit int
+
+// runCommand exécute une commande de la CLI et renvoie son code de sortie et
+// son enveloppe JSON, sans quitter le processus de test.
+func runCommand(t *testing.T, run func()) (code int, out map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	oldOut, oldExit := stdout, exit
+	stdout, exit = &buf, func(c int) { panic(cliExit(c)) }
+	defer func() { stdout, exit = oldOut, oldExit }()
+	func() {
+		defer func() {
+			r := recover()
+			c, ok := r.(cliExit)
+			if !ok {
+				panic(r)
+			}
+			code = int(c)
+		}()
+		run()
+	}()
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("enveloppe illisible %q : %v", buf.String(), err)
+	}
+	return code, out
+}
+
+// sansID : résultat d'analyse sans les identifiants aléatoires des règles.
+func sansID(t *testing.T, v any) string {
+	t.Helper()
+	raw, _ := json.Marshal(v)
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range m["accounts"].([]any) {
+		for _, r := range a.(map[string]any)["proposed"].([]any) {
+			delete(r.(map[string]any), "id")
+		}
+	}
+	raw, _ = json.Marshal(m)
+	return string(raw)
+}
+
+// Test 11 du §4.3.1.
+func TestCLIRulesAnalyze(t *testing.T) {
+	ctx := context.Background()
+	// même studio fictif des deux côtés : l'API sert de référence
+	srv, ref := tuningServer(t)
+	perfFixture(t, ref, "main")
+	_, m := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", `{"account":"main"}`)
+	want := sansID(t, m["data"])
+
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	code, out := runCommand(t, func() { cmdRules(ctx, e.st, parseArgs([]string{"analyze", "--account", "main"})) })
+	if code != 0 || out["ok"] != true || out["schema_version"] != "1" || out["error"] != nil {
+		t.Fatalf("enveloppe : code %d, %v", code, out)
+	}
+	if got := sansID(t, out["data"]); got != want || e.ai.calls != 1 {
+		t.Fatalf("contenu CLI :\n%s\nattendu (API) :\n%s", got, want)
+	}
+	stored := perfRules(e.st.store.Snapshot())
+	proposed := out["data"].(map[string]any)["accounts"].([]any)[0].(map[string]any)["proposed"].([]any)
+	if len(stored) != 2 || len(proposed) != 2 || proposed[0].(map[string]any)["id"] != stored[0].ID {
+		t.Fatalf("règles enregistrées : %+v", stored)
+	}
+
+	// compte inconnu : enveloppe d'erreur, code 1
+	code, out = runCommand(t, func() { cmdRules(ctx, e.st, parseArgs([]string{"analyze", "-a", "inconnu"})) })
+	if code != 1 || out["ok"] != false || out["error"].(map[string]any)["code"] != "error" {
+		t.Fatalf("compte inconnu : code %d, %v", code, out)
+	}
+
+	// réglage --auto-perf-analysis[=false]
+	if code, out := runCommand(t, func() { cmdSettings(e.st.store, parseArgs([]string{"--auto-perf-analysis"})) }); code != 0 ||
+		out["data"].(map[string]any)["autoPerfAnalysis"] != true || !e.st.store.Snapshot().Settings.AutoPerfAnalysis {
+		t.Fatalf("--auto-perf-analysis : %v", out)
+	}
+	if code, _ := runCommand(t, func() { cmdSettings(e.st.store, parseArgs([]string{"--auto-perf-analysis=false"})) }); code != 0 ||
+		e.st.store.Snapshot().Settings.AutoPerfAnalysis {
+		t.Fatal("--auto-perf-analysis=false doit désactiver l'analyse")
+	}
+	if !strings.Contains(usageText, "rules analyze [--account c]") || !strings.Contains(usageText, "--auto-perf-analysis[=false]") {
+		t.Fatal("aide non mise à jour")
 	}
 }
