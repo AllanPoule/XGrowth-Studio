@@ -1,38 +1,179 @@
-# XGrowth-Studio
+<div align="center">
 
-Outil de croissance sur X qui réunit [Growth Studio](https://github.com/ai-timon-admin/growth-studio)
-et [AgentX](https://github.com/DezXBT/AgentX).
+<img src="web/favicon.svg" width="72" alt="">
 
-## Licence
+# XGrowth Studio
 
-Copyright (C) 2026 Allan Dardart
+**Le studio de croissance sur X, piloté par l'IA que vous avez déjà.**
+Claude Code, Codex (ChatGPT), Gemini CLI ou l'API Claude écrivent dans votre voix.
+Vous validez. XGrowth publie.
 
-XGrowth Studio est distribué sous licence **GNU Affero General Public License v3.0**
-(voir [`LICENSE`](LICENSE)). Vous pouvez l'utiliser, le modifier et le redistribuer,
-y compris à des fins commerciales, à condition de publier sous la même licence le code
-source de toute version modifiée, y compris lorsqu'elle est proposée comme service en ligne.
+[Fonctionnalités](#fonctionnalités) · [Démarrage](#démarrage-en-2-minutes) · [IA](#lia-de-votre-choix) · [Connexion à X](#connexion-à-x) · [Déploiement privé](#déploiement-privé-netbird-tailscale) · [CLI et agents](#cli-et-agents) · [English](#english)
 
-Ce projet inclut du code sous licence MIT issu de Growth Studio et d'AgentX
-(voir [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![Licence](https://img.shields.io/badge/licence-AGPL--3.0-8b5cf6)
+![Un binaire](https://img.shields.io/badge/d%C3%A9ploiement-un%20binaire-22d3ee)
 
-## Licence commerciale
+</div>
 
-Si les conditions de l'AGPL-3.0 ne conviennent pas à votre usage (par exemple pour
-intégrer XGrowth Studio dans un produit ou un service sans publier votre code source),
-une licence commerciale peut être proposée. Contactez le mainteneur via
-[GitHub](https://github.com/AllanPoule).
+---
 
-## Contribuer
+XGrowth Studio est un binaire unique (Go, aucune base de données externe) qui sert un studio web et une CLI :
 
-Les contributions sont les bienvenues. Chaque contributeur signe un accord de
-contribution ([`CLA.md`](CLA.md)) lors de sa première pull request.
-Voir [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- **L'IA écrit** : brouillons à partir d'un brief, d'un post repéré ou de rien du tout ; réponses et citations ;
+  réécriture à partir de vos retours.
+- **Vous gardez la main** : rien ne part sans une validation signée, et des garde-fous bloquent ce qui ne doit
+  jamais partir.
+- **Le studio publie** au bon moment, surveille votre domaine, trie ce qui mérite un post et mesure ce qui marche.
 
-## Avertissement
+## Fonctionnalités
 
-Ce projet n'est ni affilié, ni approuvé, ni soutenu par X Corp.
-Il utilise des points d'accès non officiels de X et une connexion par cookies.
-Cet usage peut enfreindre les conditions d'utilisation de X et entraîner
-la limitation ou la suspension de votre compte. Le logiciel est fourni
-« tel quel », sans aucune garantie. Vous l'utilisez à vos propres risques
-et restez seul responsable des contenus publiés et des actions effectuées.
+| | |
+| --- | --- |
+| ✍️ **Rédaction** | Brouillons dans votre voix (ton, sujets, consignes), réponses et citations de posts X, réécriture guidée. Chaque retour devient une *leçon* réutilisée pour tous les posts suivants. |
+| 🧠 **IA au choix** | Claude Code et Codex utilisent vos abonnements Claude ou ChatGPT déjà installés sur la machine. Gemini CLI et l'API Claude sont aussi disponibles. Le choix se fait dans l'interface, avec un test en direct. |
+| ✅ **Validation** | File « À valider » façon X : aperçu, compteur de caractères, retouche, validation signée, planification au prochain créneau libre ou à l'heure choisie. |
+| 🛡️ **Garde-fous** | Concurrents jamais nommés, expressions interdites, limite de longueur, pas de doublon, limite quotidienne, écart minimal entre deux posts. Tout est revérifié juste avant l'envoi, ainsi que l'identité du compte X connecté. |
+| 📡 **Veille** | Comptes et recherches X suivis, import des signets, tri par l'IA (score, raison, angle) et brouillons automatiques facultatifs. |
+| 📅 **Calendrier** | Vue semaine, file de publication, publication automatique par le planificateur. |
+| 📈 **Performances** | Vues, likes, reposts, réponses, taux d'engagement. Les meilleurs posts guident l'IA. |
+| 🔐 **Sécurité** | Mot de passe créé avec un code d'installation à usage unique, sessions révocables, noms d'hôte autorisés, CLI d'IA lancées **sans aucun outil**. |
+| 🤖 **Pilotable par agent** | Chaque commande CLI renvoie une enveloppe JSON, comme [AgentX](https://github.com/DezXBT/AgentX). `SKILL.md` décrit l'outil à un agent. |
+
+## Démarrage en 2 minutes
+
+```bash
+git clone https://github.com/AllanPoule/XGrowth-Studio && cd XGrowth-Studio
+make build            # ou : go build -o xgrowth .
+./xgrowth serve       # http://127.0.0.1:8787
+```
+
+Au premier lancement, le terminal affiche un **code d'installation** (copié aussi dans `~/.xgrowth/setup-code.txt`).
+Ouvrez le studio, saisissez ce code, choisissez un mot de passe : l'assistant vous guide ensuite en cinq minutes.
+
+1. **L'IA** : XGrowth détecte celles qui sont installées. Vous en choisissez une et vous la testez en direct.
+2. **Le compte X** : session AgentX, API officielle ou simulation.
+3. **La voix** : un style de départ, vos mots, vos sujets.
+4. **Le rythme et les garde-fous** : créneaux, fuseau, concurrents à ne jamais nommer.
+5. **La veille**, puis **un premier post** rédigé sous vos yeux.
+
+## L'IA de votre choix
+
+| Fournisseur | Ce qu'il faut sur la machine | Coût |
+| --- | --- | --- |
+| **Claude Code** | `claude`, connecté une fois (`claude` puis `/login`) | votre abonnement Claude |
+| **Codex (ChatGPT)** | `codex`, connecté (`codex login`) | votre abonnement ChatGPT |
+| **Gemini CLI** *(expérimental)* | `gemini`, connecté | votre compte Google |
+| **API Claude** | `ANTHROPIC_API_KEY` | à l'usage (`claude-opus-5-5` par défaut) |
+
+Les CLI sont lancées en mode non interactif, **sans aucun outil** (pas de shell, pas de fichiers, pas de web) et dans
+un dossier temporaire vide. Les posts lus sur X ne peuvent donc rien leur faire exécuter. Les réponses sont
+contraintes par un JSON Schema. Claude Code est lancé sans `ANTHROPIC_API_KEY` pour utiliser l'abonnement et non
+l'API.
+
+```bash
+./xgrowth providers --pretty                    # ce qui est détecté
+./xgrowth ai-test --provider codex --pretty     # un essai réel
+./xgrowth settings --provider claude-code       # le choix (aussi dans Réglages)
+```
+
+## Connexion à X
+
+| Mode | Ce qu'il faut | Remarques |
+| --- | --- | --- |
+| **Session X (AgentX)** — recommandé | le binaire [`agentx`](https://github.com/DezXBT/AgentX) (dans le `PATH`, à côté de `xgrowth`, dans `bin/` ou via `AGENTX_BIN`) | publication, visuels, veille, signets. Les cookies `auth_token` et `ct0` se collent dans l'assistant : ils sont transmis à agentx par l'environnement et restent sur le serveur. |
+| **API X officielle** | un jeton OAuth 2.0 utilisateur dans une variable d'environnement | lecture et recherche payantes côté X, pas de visuels |
+| **Simulation** | rien | pour essayer : rien n'est publié |
+
+> ⚠️ L'automatisation par session web n'est pas autorisée par les conditions d'utilisation de X : un compte utilisé
+> avec AgentX s'expose à une suspension. L'API officielle est la voie conforme.
+
+Avant chaque envoi, XGrowth vérifie que la session connectée correspond bien au handle du compte. Un post ne part
+jamais depuis le mauvais compte.
+
+## Déploiement privé (NetBird, Tailscale…)
+
+Le studio peut publier sur votre compte : exposez-le uniquement sur un réseau privé. Exemple sur un serveur Linux
+relié à NetBird, derrière nginx :
+
+```bash
+make release                                   # binaires linux/amd64, linux/arm64, darwin dans dist/
+sudo install -m 755 dist/xgrowth-linux-arm64 /opt/xgrowth/xgrowth
+sudo install -m 755 agentx /opt/xgrowth/bin/agentx   # facultatif
+sudo cp deploy/xgrowth.service /etc/systemd/system/  # puis adaptez User= et --host
+sudo systemctl enable --now xgrowth
+journalctl -u xgrowth | grep "Code d'installation"
+```
+
+- `deploy/xgrowth.service` : le service systemd. Il tourne sous l'utilisateur qui a connecté Claude Code ou Codex.
+- `deploy/nginx-private.conf` : nginx qui n'écoute **que** sur l'IP du réseau privé, en TLS.
+- Le DNS public peut pointer vers l'IP privée (enregistrement A sans proxy) : le nom se résout partout, mais le
+  service ne répond qu'aux machines du réseau. Le certificat s'obtient par défi DNS
+  (`certbot --dns-cloudflare`, par exemple).
+- `xgrowth serve --host studio.exemple.fr` autorise ce nom d'hôte (tout autre nom est refusé).
+
+## CLI et agents
+
+Chaque commande imprime une enveloppe JSON : `{"ok":true,"schema_version":"1","data":…}`.
+
+```bash
+./xgrowth draft moncompte --topic "3 leçons sur les agents IA" -n 3
+./xgrowth reply moncompte https://x.com/quelquun/status/123
+./xgrowth posts --status draft --pretty
+./xgrowth rewrite <id> --feedback "plus court, une seule idée"
+./xgrowth validate <id> --by Prénom              # prochain créneau libre
+./xgrowth watch add moncompte --search "agents IA lang:fr -is:retweet"
+./xgrowth run                                     # planificateur seul (publication, veille, tri, stats)
+./xgrowth help                                    # tout le reste
+```
+
+Un agent (Claude Code ou autre) peut veiller, trier, rédiger et réécrire. **Il ne valide jamais** : voir
+[`SKILL.md`](SKILL.md).
+
+## Architecture
+
+```
+main.go        CLI (enveloppe JSON)              server.go   API HTTP + studio web embarqué (web/)
+studio.go      brouillons, validation,           auth.go     mot de passe PBKDF2, sessions, code d'installation
+               planification, publication,       providers.go Claude Code / Codex / Gemini CLI / API
+               veille, tri, statistiques         ai.go       prompts et schémas JSON
+xbackend.go    agentx, API X officielle, simulation
+store.go       un fichier JSON (0600), verrou de fichier partagé entre processus
+```
+
+Données : `$XGROWTH_HOME/data.json` (par défaut `~/.xgrowth`). Aucun secret (clé, jeton, cookie) n'y est écrit ;
+le mot de passe n'y figure que haché.
+
+```bash
+make test        # go vet + tests
+```
+
+## Crédits et licence
+
+XGrowth Studio reprend les idées de [Growth Studio](https://github.com/ai-timon-admin/growth-studio) (file de
+validation, veille, leçons) et pilote X à travers [AgentX](https://github.com/DezXBT/AgentX). Leurs licences MIT sont
+reproduites dans [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+XGrowth Studio est distribué sous **GNU AGPL-3.0** ([`LICENSE`](LICENSE)). Si vous proposez une version modifiée
+comme service en ligne, vous devez en publier le code source. Les contributions passent par un CLA
+([`CONTRIBUTING.md`](CONTRIBUTING.md)).
+
+---
+
+## English
+
+**XGrowth Studio** is a single Go binary that runs an AI-powered growth studio for X (Twitter). It writes posts,
+replies and quotes in your voice with the AI you already have: **Claude Code** (your Claude subscription),
+**Codex** (your ChatGPT subscription), **Gemini CLI** or the **Claude API**. Nothing is published without your signed
+validation. Guardrails (competitor names, banned phrases, length, duplicates, daily limits, connected-account
+identity) are checked again right before sending. It also watches accounts and searches, triages what deserves a
+post, schedules on time slots and tracks performance.
+
+```bash
+make build && ./xgrowth serve   # then open http://127.0.0.1:8787 and follow the onboarding
+```
+
+AI CLIs run non-interactively with **all tools disabled** in an empty temp directory, with JSON-schema-constrained
+output. X is driven through [AgentX](https://github.com/DezXBT/AgentX) (browser session, which X's terms do not
+allow), the official X API, or a dry-run mode. Expose the studio on a private network only (NetBird, Tailscale);
+see `deploy/`. Licensed under AGPL-3.0.
