@@ -326,6 +326,75 @@ func TestWatchTriageAndAutoDraft(t *testing.T) {
 	if !strings.Contains(e.ai.lastMsg, "Les agents IA en production") || !strings.Contains(e.ai.lastSys, "données à commenter") {
 		t.Fatal("le contenu de veille doit être transmis comme donnée balisée")
 	}
+	// le contenu jugé peu pertinent n'est PAS ignoré : il reste à trier, avec la suggestion
+	for _, it := range d.Items {
+		switch it.TweetID {
+		case "1":
+			if it.Status != ItemDrafted || it.Suggestion != SuggestKeep {
+				t.Fatalf("contenu suggéré : %+v", it)
+			}
+		case "2":
+			if it.Status != ItemPending || it.Suggestion != SuggestSkip || it.TriagedAt == nil {
+				t.Fatalf("un contenu écarté par l'IA doit rester à trier : %+v", it)
+			}
+		}
+	}
+	// un second passage ne renote pas ce qui a déjà été trié
+	calls := e.ai.calls
+	if tr := e.st.TriagePending(context.Background(), "", true, false); tr[0].Triaged != 0 || e.ai.calls != calls {
+		t.Fatalf("contenus retriés : %+v", tr)
+	}
+}
+
+func TestTriageWithoutAutoDraftChangesNoStatus(t *testing.T) {
+	e := newEnv(t)
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Items = append(d.Items,
+			&Item{ID: "i1", Account: "main", TweetID: "1", Text: "agents en prod", Status: ItemPending},
+			&Item{ID: "i2", Account: "main", TweetID: "2", Text: "météo", Status: ItemPending})
+		return nil
+	})
+	tr := e.st.TriagePending(context.Background(), "main", false, false)
+	if tr[0].Triaged != 2 || tr[0].Kept != 1 {
+		t.Fatalf("%+v", tr)
+	}
+	for _, it := range e.st.store.Snapshot().Items {
+		if it.Status != ItemPending {
+			t.Fatalf("le tri seul ne doit changer aucun statut : %+v", it)
+		}
+	}
+}
+
+func TestMigrationRestoresItemsIgnoredByAI(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"version":1,"settings":{"minGapMinutes":60,"maxItemsPerRun":40},"items":[
+	 {"id":"a","account":"main","status":"ignored","score":3,"reason":"hors sujet","fetchedAt":"2026-11-18T10:00:00Z"},
+	 {"id":"b","account":"main","status":"kept","score":8,"fetchedAt":"2026-11-18T10:00:00Z"},
+	 {"id":"c","account":"main","status":"pending","score":0,"fetchedAt":"2026-11-18T10:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "data.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := store.Snapshot()
+	if d.Version != dataVersion {
+		t.Fatalf("version %d", d.Version)
+	}
+	if a := d.Item("a"); a.Status != ItemPending || a.Suggestion != SuggestSkip || a.TriagedAt == nil {
+		t.Fatalf("contenu écarté par l'IA non restauré : %+v", a)
+	}
+	if b := d.Item("b"); b.Status != ItemKept || b.Suggestion != SuggestKeep {
+		t.Fatalf("%+v", b)
+	}
+	if c := d.Item("c"); c.Status != ItemPending || c.TriagedAt != nil {
+		t.Fatalf("un contenu jamais trié doit rester à trier par l'IA : %+v", c)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "data.json"))
+	if !strings.Contains(string(raw), `"version": 2`) {
+		t.Fatal("la migration doit être écrite sur disque")
+	}
 }
 
 func TestRewriteStoresLearningAndFeedsPrompt(t *testing.T) {

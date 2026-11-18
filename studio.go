@@ -826,8 +826,11 @@ type TriageResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// TriagePending fait trier les contenus en attente par Claude ; avec AutoDraft
-// (ou draft=true), un brouillon est rédigé pour chaque contenu gardé.
+// TriagePending fait noter par l'IA les contenus « à trier » qu'elle n'a pas
+// encore vus. L'IA ne fait que suggérer (Suggestion, Score, Reason, Angle) :
+// le contenu reste « à trier » jusqu'à une action de l'utilisateur. Seule
+// exception, voulue par l'utilisateur : avec AutoDraft (ou draft=true), un
+// brouillon est rédigé pour chaque contenu suggéré, qui passe en « rédigé ».
 func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, draft bool) []TriageResult {
 	d := s.store.Snapshot()
 	var res []TriageResult
@@ -840,7 +843,7 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 		}
 		var pending []*Item
 		for _, it := range d.Items {
-			if it.Account == a.Name && it.Status == ItemPending {
+			if it.Account == a.Name && it.Status == ItemPending && it.TriagedAt == nil {
 				pending = append(pending, it)
 			}
 		}
@@ -859,15 +862,16 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 			_ = s.store.Update(func(d *Data) error {
 				for _, o := range outs {
 					it := d.Item(o.ID)
-					if it == nil || it.Status != ItemPending {
+					if it == nil || it.Status != ItemPending || it.TriagedAt != nil {
 						continue
 					}
-					it.Score, it.Reason, it.Angle = o.Score, o.Reason, o.Angle
+					now := s.now().UTC()
+					it.Score, it.Reason, it.Angle, it.TriagedAt = o.Score, o.Reason, o.Angle, &now
 					if o.Keep && o.Score >= d.Settings.TriageMinScore {
-						it.Status = ItemKept
+						it.Suggestion = SuggestKeep
 						kept = append(kept, it.ID)
 					} else {
-						it.Status = ItemIgnored
+						it.Suggestion = SuggestSkip
 					}
 					r.Triaged++
 				}

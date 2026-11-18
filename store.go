@@ -134,7 +134,16 @@ type Item struct {
 	Reason    string    `json:"reason,omitempty"`
 	Angle     string    `json:"angle,omitempty"`
 	FetchedAt time.Time `json:"fetchedAt"`
+	// Le tri par l'IA ne fait que suggérer : seul l'utilisateur change Status
+	// (sauf les brouillons automatiques, qui passent le contenu en « drafted »).
+	Suggestion string     `json:"suggestion,omitempty"` // keep | skip
+	TriagedAt  *time.Time `json:"triagedAt,omitempty"`
 }
+
+const (
+	SuggestKeep = "keep"
+	SuggestSkip = "skip"
+)
 
 type Learning struct {
 	ID            string     `json:"id"`
@@ -248,8 +257,19 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, err
 	}
 	if s.data == nil {
-		s.data = &Data{Version: 1, Settings: defaultSettings()}
+		s.data = &Data{Version: dataVersion, Settings: defaultSettings()}
 		return s, s.save()
+	}
+	if b, err := os.ReadFile(s.path); err == nil {
+		var head struct {
+			Version int `json:"version"`
+		}
+		// la migration a eu lieu en mémoire : on l'écrit tout de suite
+		if json.Unmarshal(b, &head) == nil && head.Version < dataVersion {
+			if err := s.save(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return s, nil
 }
@@ -279,8 +299,39 @@ func (s *Store) reload() error {
 	if d.Settings.MinGapMinutes == 0 && d.Settings.MaxItemsPerRun == 0 {
 		d.Settings = defaultSettings()
 	}
+	migrate(d)
 	s.data, s.modTime = d, st.ModTime()
 	return nil
+}
+
+const dataVersion = 2
+
+// migrate met à jour un data.json écrit par une version précédente.
+// Renvoie true si quelque chose a changé.
+func migrate(d *Data) bool {
+	if d.Version >= dataVersion {
+		return false
+	}
+	if d.Version < 2 {
+		// Avant la v2, le tri automatique déplaçait seul les contenus en
+		// « ignorés » (et en « gardés »). Il ne fait désormais que suggérer :
+		// les contenus écartés par l'IA reviennent « à trier ».
+		for _, it := range d.Items {
+			if it.Score <= 0 || it.TriagedAt != nil {
+				continue
+			}
+			t := it.FetchedAt
+			it.TriagedAt = &t
+			switch it.Status {
+			case ItemIgnored:
+				it.Status, it.Suggestion = ItemPending, SuggestSkip
+			case ItemKept, ItemDrafted:
+				it.Suggestion = SuggestKeep
+			}
+		}
+	}
+	d.Version = dataVersion
+	return true
 }
 
 func (s *Store) save() error {
