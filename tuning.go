@@ -341,13 +341,23 @@ const (
 	RuleRevoked  = "revoked"  // retirée après acceptation : jamais reproposée
 )
 
-// RuleProposal : règle tirée des retours (rejets, réécritures, leçons).
+// Origines d'une règle apprise (champ Source).
+const (
+	RuleSourceFeedback    = "feedback"    // tirée des retours (vide = idem, règles d'avant le lot 1)
+	RuleSourcePerformance = "performance" // tirée des statistiques des posts publiés
+)
+
+// RuleProposal : règle tirée des retours (rejets, réécritures, leçons) ou des
+// performances des posts publiés.
 type RuleProposal struct {
 	ID        string     `json:"id"`
 	Account   string     `json:"account,omitempty"` // vide = tous les comptes
 	Text      string     `json:"text"`
 	Rationale string     `json:"rationale,omitempty"`
-	Evidence  []string   `json:"evidence,omitempty"` // identifiants des leçons qui la justifient
+	Evidence  []string   `json:"evidence,omitempty"` // identifiants des leçons qui la justifient ; des posts pour la source « performance »
+	Source    string     `json:"source,omitempty"`   // "" ou "feedback" = tirée des retours ; "performance"
+	Basis     string     `json:"basis,omitempty"`    // chiffres calculés par le code, jamais par l'IA
+	Signals   []string   `json:"signals,omitempty"`  // clés de signal citées, ex. "type:utile"
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"createdAt"`
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
