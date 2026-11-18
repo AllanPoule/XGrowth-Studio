@@ -647,6 +647,7 @@ function vSettings(v) {
       <h3 style="margin-top:22px">Types de posts</h3><p class="small muted" style="margin-top:0">Chaque brouillon relève d'un type ; l'IA privilégie le type le plus en retard sur sa part visée (30 derniers jours).</p>
       ${typesEditor(s.postTypes, "Aucun type commun : l'IA écrit sans type, sauf pour les comptes qui ont les leurs.")}
       <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" data-act="tune-save">Enregistrer</button></div></div>
+    ${sourcesCommon()}
     <h2>Garde-fous</h2>
     <div class="card"><div class="grid"><div><label class="l">Écart minimal entre deux posts</label><select id="gap">${[15, 30, 60, 120, 180, 240].map(m => `<option value="${m}" ${s.minGapMinutes === m ? "selected" : ""}>${m < 60 ? m + " min" : m / 60 + " h"}</option>`).join("")}</select></div>
       <div><label class="l">Score minimal pour garder un contenu</label><input id="tmin" type="number" step="0.5" min="0" max="10" value="${s.triageMinScore}"></div>
@@ -712,6 +713,7 @@ function accountForm(a) {
         <label class="toggle"><input type="checkbox" name="premium" ${a.premium ? "checked" : ""}><span class="sw"></span>X Premium</label>
         <label class="toggle"><input type="checkbox" name="autoTriage" ${a.autoTriage ? "checked" : ""}><span class="sw"></span>Tri automatique</label>
         <label class="toggle"><input type="checkbox" name="autoDraft" ${a.autoDraft ? "checked" : ""}><span class="sw"></span>Brouillons automatiques</label></div>
+      ${sourcesBox(a)}
       <details class="tune" style="margin-top:18px"><summary>${I.sliders} Affiner l'IA pour ce compte</summary>
         <label class="l">Objectifs du compte</label><textarea name="goals" rows="2" placeholder="Ex. : 50 clients pour l'outil d'audit d'ici mars ; être la référence française sur les agents IA">${esc(a.goals || "")}</textarea>
         <div class="hint">Chaque post doit les servir. L'IA les lit avant d'écrire.</div>
@@ -859,6 +861,71 @@ const actions = {
   async learn(b) { await run(b, () => api("/api/learnings", { account: $("#la").value, text: $("#lt").value }), "Leçon ajoutée") },
   async unlearn(b) { await run(b, () => api(`/api/learnings/${b.dataset.id}/remove`, {})) },
 };
+
+// ------------------------------------------------------------------ sources
+let SRC = null; // état des sources (GET /api/sources), chargé avec les réglages
+
+function sourcesBox(a) {
+  const src = a.sources || {}, users = (a.watch || []).filter(w => w.kind === "user");
+  return `<details class="tune" style="margin-top:18px" data-sources="${esc(a.name)}"><summary>${I.radar} Sources de ce compte</summary>
+    <label class="l">Changelog du produit (build in public)</label><input data-src="changelog" value="${esc(src.changelog || "")}" placeholder="https://exemple.fr/CHANGELOG.md ou /chemin/absolu/CHANGELOG.md">
+    <div class="hint">Les nouvelles lignes arrivent dans la veille ; le premier relevé sert de référence.</div>
+    <label class="l">Dépôts GitHub étoilés</label><input data-src="githubUser" value="${esc(src.githubUser || "")}" placeholder="Votre identifiant GitHub">
+    <div class="hint">Chaque nouveau dépôt étoilé devient un contenu de veille.</div>
+    <label class="toggle" style="margin-top:14px"><input type="checkbox" data-src="news" ${src.news ? "checked" : ""}><span class="sw"></span>Rédiger les actualités des sources primaires</label>
+    <label class="l">Sources primaires (comptes suivis)</label>
+    ${users.length ? `<div class="chips">${users.map(w => `<label class="chip ${w.primary ? "on" : ""}"><input type="checkbox" data-primary="${w.id}" ${w.primary ? "checked" : ""}>@${esc(w.value)}</label>`).join("")}</div>
+      <div class="hint">Un nouveau post d'une source primaire est rédigé en actualité une fois son fil calmé.</div>` : `<div class="hint">Suivez d'abord des comptes dans la Veille.</div>`}
+    <label class="l">Consigne des brouillons de news</label><textarea data-src="newsPrompt" rows="3" placeholder="${esc(S.settings.newsPrompt || SRC?.defaults?.newsPrompt || "Vide : la consigne commune")}">${esc(src.newsPrompt || "")}</textarea>
+    <label class="l">Méthode de récupération (consignes libres)</label><textarea data-src="method" rows="3" placeholder="Ex. : garde les annonces officielles et les retours d'expérience chiffrés, ignore les rumeurs.">${esc(src.method || "")}</textarea>
+    <div class="hint">Transmise à l'IA à chaque tri de la veille.</div>
+    <div class="row" style="margin-top:12px"><span class="small muted" data-src-status="${esc(a.name)}"></span><span class="spacer"></span>
+      <button class="btn ghost sm" data-act="src-poll" data-name="${esc(a.name)}">${I.refresh} Relever maintenant</button><button class="btn sm primary" data-act="src-save" data-name="${esc(a.name)}">Enregistrer les sources</button></div></details>`;
+}
+
+function sourcesCommon() {
+  setTimeout(loadSources, 0); // état et valeurs par défaut, complétés une fois la page affichée
+  const st = S.settings, d = SRC?.defaults || {};
+  const num = (k, label, def) => `<div><label class="l">${label}</label><input data-srcg="${k}" type="number" min="0" value="${st[k] || ""}" placeholder="${def ?? ""}"></div>`;
+  return `<h2>Sources et actualités</h2>
+    <div class="card" id="src-common"><p class="small muted" style="margin-top:0">Communs à tous les comptes. Chaque compte choisit ses sources dans sa fiche (Comptes X › Modifier › Sources de ce compte).</p>
+      <div class="grid">${num("newsQuietMinutes", "Attendre que le fil se calme (min)", d.newsQuietMinutes)}${num("newsMaxAgeHours", "Âge maximum d'une actualité (h)", d.newsMaxAgeHours)}
+        ${num("newsMaxPerDay", "Actualités par jour et par compte", d.newsMaxPerDay)}${num("sourcesEveryMinutes", "Relever changelog et étoiles toutes les (min)", d.sourcesEveryMinutes)}</div>
+      <label class="l">Consigne des brouillons de news</label><textarea data-srcg="newsPrompt" rows="3" placeholder="${esc(d.newsPrompt || "")}">${esc(st.newsPrompt || "")}</textarea>
+      <div class="row" style="margin-top:12px"><button class="btn ghost sm" data-act="news-now">${I.spark} Rédiger les actualités maintenant</button><span class="spacer"></span><button class="btn primary" data-act="src-common-save">Enregistrer</button></div></div>`;
+}
+
+// charge l'état des sources puis complète l'affichage des réglages
+async function loadSources() {
+  try { SRC = await api("/api/sources") } catch { return }
+  $$("[data-src-status]").forEach(el => {
+    const x = SRC.accounts?.[el.dataset.srcStatus];
+    if (!x) return;
+    const parts = [];
+    if (x.changelogAt) parts.push(`changelog relevé ${rel(x.changelogAt)}`);
+    if (x.starsAt) parts.push(`étoiles relevées ${rel(x.starsAt)}`);
+    if (x.newsCount) parts.push(`${x.newsCount} actualité(s) aujourd'hui`);
+    el.innerHTML = esc(parts.join(" · ")) + (x.lastError ? ` <span style="color:var(--bad)">${esc(x.lastError)}</span>` : "");
+  });
+  const d = SRC.defaults || {};
+  $$("[data-srcg]").forEach(i => { if (!i.placeholder && d[i.dataset.srcg] != null) i.placeholder = d[i.dataset.srcg] });
+}
+
+Object.assign(actions, {
+  async "src-save"(b) {
+    const box = b.closest("[data-sources]"), g = k => box.querySelector(`[data-src="${k}"]`);
+    const sources = { changelog: g("changelog").value.trim(), githubUser: g("githubUser").value.trim(), news: g("news").checked, newsPrompt: g("newsPrompt").value.trim(), method: g("method").value.trim() };
+    const primary = $$("[data-primary]", box).filter(c => c.checked).map(c => c.dataset.primary);
+    await run(b, () => api(`/api/accounts/${encodeURIComponent(b.dataset.name)}/sources`, { sources, primary }), "Sources enregistrées");
+  },
+  async "src-poll"(b) { await run(b, () => api("/api/sources/poll", { account: b.dataset.name }), r => r.length ? r.map(x => x.error || (x.baseline ? "Référence enregistrée" : `${x.changelog} nouveauté(s) du changelog, ${x.stars} dépôt(s) étoilé(s)`)).join(" · ") : "Aucune source réglée pour ce compte", { wait: "Relevé…" }) },
+  async "news-now"(b) { await run(b, () => api("/api/news/draft", {}), r => r.length ? r.map(x => x.error || `${x.drafted} actualité(s) rédigée(s)`).join(" · ") : "Aucune actualité prête (fil encore actif, déjà traitée ou rien de nouveau)", { wait: "Écriture…" }) },
+  async "src-common-save"(b) {
+    const box = $("#src-common"), o = {};
+    $$("[data-srcg]", box).forEach(i => { o[i.dataset.srcg] = i.type === "number" ? (+i.value || 0) : i.value.trim() });
+    await run(b, () => api("/api/settings", o), "Réglages des sources enregistrés");
+  },
+});
 
 function autosize(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 4 + "px" }
 

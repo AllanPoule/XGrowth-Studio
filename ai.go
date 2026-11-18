@@ -328,6 +328,9 @@ func Triage(ctx context.Context, ai AI, a *Account, d *Data, items []*Item) ([]T
 	if a.TriageRules != "" {
 		u.WriteString("\n<criteres>\n" + a.TriageRules + "\n</criteres>\n")
 	}
+	if m := a.Sources.Method; m != "" {
+		u.WriteString("\n<methode_de_recuperation>\n" + m + "\n</methode_de_recuperation>\n")
+	}
 	u.WriteString("\nNote chaque contenu de 0 à 10 (score), keep=true s'il vaut un post, une raison courte et l'angle à prendre.\n")
 	for _, it := range items {
 		fmt.Fprintf(&u, "\n<contenu_x id=%q auteur=%q likes=\"%d\" vues=\"%d\">\n%s\n</contenu_x>\n", it.ID, it.Author, it.Likes, it.Views, it.Text)

@@ -83,6 +83,9 @@ func (s *Studio) SaveAccount(a *Account) error {
 	if err := normalizeTuning(a); err != nil {
 		return err
 	}
+	if err := normalizeSources(&a.Sources); err != nil {
+		return err
+	}
 	return s.store.Update(func(d *Data) error {
 		if old := d.Account(a.Name); old != nil {
 			if a.Watch == nil {
@@ -965,6 +968,12 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if r := s.TriagePending(ctx, "", true, false); len(r) > 0 {
 		out["triage"] = r
+	}
+	if r := s.PollSources(ctx, "", false); len(r) > 0 {
+		out["sources"] = r
+	}
+	if r := s.DraftNews(ctx); len(r) > 0 {
+		out["news"] = r
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
