@@ -237,3 +237,17 @@ details.tune[open]>summary{margin-bottom:6px}
 .ptype .share{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12.5px}
 .ptype .share input{padding:10px 8px;text-align:right}
 @media (max-width:640px){.ptype-head{grid-template-columns:1fr 88px auto}.ptype-head [data-f=goal]{grid-column:1/-1;order:3}}
+
+/* ---------- retours, idées, repères */
+.fb-list{display:grid;gap:10px;margin-top:10px}
+.fb{border:1px solid var(--line);border-radius:var(--r2);padding:10px 12px;background:var(--panel2)}
+.fb.off{opacity:.6}
+.fb-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.fb-diff{display:grid;gap:4px}
+.fb-diff>div{border-left:2px solid var(--line2);padding-left:8px}
+.fb-diff>div:last-child{border-left-color:var(--a1)}
+.toggle.small{font-size:12.5px}
+.ideas{display:grid;gap:10px;margin-top:12px}
+.idea{border:1px solid var(--line);border-radius:var(--r2);padding:12px;background:var(--panel2)}
+.idea .small{margin-top:4px}
+mark.ph{background:var(--warnbg);color:var(--warn);border-radius:4px;padding:0 3px;font-weight:600}

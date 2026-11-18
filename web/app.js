@@ -253,7 +253,8 @@ function tweetCard(p, mode) {
     <div style="min-width:0">
       <div class="tw-head"><b>${esc(a?.displayName || h)}</b><span class="h">@${esc(h)}</span><span class="h small">${when}</span><span class="spacer"></span>${p.postType ? `<span class="pill">${esc(typeLabel(p.account, p.postType))}</span>` : ""}${KIND[p.kind] ? `<span class="pill">${KIND[p.kind]}</span>` : ""}${statusPill(p.status)}</div>
       ${target}
-      ${editable ? `<textarea class="tw-edit" data-edit="${p.id}" rows="4">${esc(text)}</textarea>` : `<div class="tw-text">${esc(text)}</div>`}
+      ${editable ? `<textarea class="tw-edit" data-edit="${p.id}" rows="4">${esc(text)}</textarea>` : `<div class="tw-text">${markPlaceholders(text)}</div>`}
+      ${placeholders(text).length ? `<div class="tw-err">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')} ${placeholders(text).length} repère(s) « À COMPLÉTER » à remplacer par du vécu réel avant de valider : ${placeholders(text).map(esc).join(" · ")}</div>` : ""}
       <div class="tw-meta">${editable ? `${ring(n, max)}<span class="cnt ${n > max ? "over" : ""}" data-cnt="${p.id}">${n} / ${max}</span>` : ""}
         ${p.mediaPath ? `<span class="pill">🖼 ${esc(p.mediaPath.split("/").pop())}</span>` : ""}
         ${p.validatedBy ? `<span class="pill">${I.shield.replace("<svg", '<svg style="width:12px;height:12px"')} ${esc(p.validatedBy)}</span>` : ""}
@@ -380,6 +381,7 @@ function vQueue(v) {
 function vCompose(v) {
   v.innerHTML = `<div class="head"><div><h1>Créer</h1><p>${esc(providerName(S.ai?.provider))} écrit dans votre voix, avec vos leçons et ce qui a marché.</p></div></div>
     ${composerBox("compose")}
+    ${ideaBank()}
     <h2>Répondre ou citer un post X</h2>
     <div class="card"><div class="row"><input id="ref" placeholder="Collez le lien d'un post : https://x.com/…/status/…" style="flex:1;width:auto">
       <button class="btn" data-act="mk-reply">${I.reply} Réponse</button><button class="btn" data-act="mk-quote">${I.quote} Citation</button></div></div>
@@ -387,6 +389,23 @@ function vCompose(v) {
     <div class="card"><textarea id="manual" placeholder="Votre post…"></textarea>
       <div class="row" style="margin-top:10px"><input id="media" placeholder="Visuel (chemin sur le serveur, facultatif)" style="flex:1;width:auto"><button class="btn" data-act="manual">Ajouter aux brouillons</button></div></div>`;
   bindComposer(v, "compose");
+}
+
+const IDEA_STATUS = { proposed: ["Proposée", "warn"], kept: ["Retenue", "ok"], drafted: ["Rédigée", ""], dismissed: ["Écartée", ""] };
+function ideaBank() {
+  const accs = S.accounts.filter(a => a.ideas?.enabled);
+  if (!accs.length) return `<h2>Banque d'idées</h2><div class="card"><p class="small muted" style="margin:0">L'IA peut vous proposer des idées de posts originaux (angle et intérêt pour votre audience), que vous retenez ou écartez avant de les faire rédiger. Activez « Proposer des idées de posts originaux » dans Réglages › votre compte › Affiner l'IA.</p></div>`;
+  const cur = accs.find(a => a.name === store.get("acc", "")) || accs[0];
+  const ideas = (S.ideas || []).filter(i => accs.some(a => a.name === i.account) && i.status !== "dismissed").slice().reverse();
+  const open = ideas.filter(i => i.status !== "drafted"), done = ideas.filter(i => i.status === "drafted").slice(0, 6);
+  const card = i => `<div class="idea"><div class="row"><b style="flex:1">${esc(i.title)}</b><span class="pill ${IDEA_STATUS[i.status][1]}">${IDEA_STATUS[i.status][0]}</span></div>
+    <div class="small"><span class="muted">Angle :</span> ${esc(i.angle)}</div><div class="small"><span class="muted">Pourquoi :</span> ${esc(i.why)}</div>
+    <div class="row" style="margin-top:8px"><span class="small faint">@${esc(handleOf(i.account))} · ${rel(i.createdAt)}</span><span class="spacer"></span>
+      ${i.status === "drafted" ? `<a class="btn ghost sm" href="#/queue">Voir le brouillon</a>` : `${i.status === "proposed" ? `<button class="btn sm" data-act="idea-keep" data-id="${i.id}">Retenir</button>` : ""}<button class="btn ghost sm" data-act="idea-dismiss" data-id="${i.id}">Écarter</button><button class="btn primary sm" data-act="idea-draft" data-id="${i.id}">${I.spark} Rédiger</button>`}</div></div>`;
+  return `<h2>Banque d'idées</h2><div class="card"><div class="row"><select id="idea-acc" style="width:auto" aria-label="Compte">${accs.map(a => `<option value="${esc(a.name)}" ${a === cur ? "selected" : ""}>@${esc(a.handle || a.name)}</option>`).join("")}</select>
+    <span class="small muted">${cur.ideas.perRequest || 5} idée(s) par demande${cur.ideas.autoDraft ? ", rédigées directement" : ""}</span><span class="spacer"></span><button class="btn" data-act="idea-suggest">${I.bulb} Proposer des idées</button></div>
+    ${open.length ? `<div class="ideas">${open.map(card).join("")}</div>` : `<p class="hint">Aucune idée en attente.</p>`}
+    ${done.length ? `<details class="tune" style="margin-top:12px"><summary>Idées déjà rédigées (${done.length})</summary><div class="ideas">${done.map(card).join("")}</div></details>` : ""}</div>`;
 }
 
 function vCalendar(v) {
@@ -495,9 +514,36 @@ function providerCards(selected, prefix = "") {
   }).join("")}</div>`;
 }
 
+// repères « [À COMPLÉTER : …] » laissés par l'IA (même règle que le serveur)
+const PH_RE = /\[\s*[àa]\s+compl[ée]ter\b[^\]]*\]/gi;
+const placeholders = t => String(t || "").match(PH_RE) || [];
+const markPlaceholders = t => esc(t).replace(PH_RE, m => `<mark class="ph">${m}</mark>`);
+
+// ------------------------------------------------------------------ profil, voix
+const ROLES = [["personnel", "Personnel"], ["marque", "Marque"], ["automatise", "Automatisé (ouvertement identifié)"]];
+const LANGS = ["français", "anglais", "espagnol", "allemand", "italien", "portugais", "néerlandais"];
+function langOptions(cur) {
+  const list = cur && !LANGS.includes(cur) ? [cur, ...LANGS] : LANGS;
+  return list.map(l => `<option value="${esc(l)}" ${(cur || "français") === l ? "selected" : ""}>${esc(l[0].toUpperCase() + l.slice(1))}</option>`).join("");
+}
+const VOICE_TEMPLATE = `Qui parle : (une ou deux phrases sur la personne ou la marque)
+
+Ton : (direct, chaleureux, ironique… ; tutoiement ou vouvoiement)
+
+Phrases types :
+- (une tournure que vous utilisez souvent)
+- (une façon d'ouvrir un post)
+
+Ce qu'on ne dit jamais :
+- (mots, formules, sujets à éviter)
+
+Exemples :
+(un ou deux posts qui sonnent juste)`;
+
 // ------------------------------------------------------------------ affiner l'IA
 const PROMPT_KINDS = [
-  ["ideas", "Idées originales", "Quand vous générez sans sujet : ce qu'est une bonne idée pour ce compte, ce qu'il faut éviter."],
+  ["ideas", "Suggestion d'idées", "Ce qu'est une bonne idée pour ce compte, ce qu'il faut éviter. Sert à la banque d'idées et quand vous générez sans sujet."],
+  ["ideaWrite", "Post tiré d'une idée", "Comment rédiger le post d'une idée retenue dans la banque d'idées."],
   ["item", "Posts tirés de la veille", "Pour un brouillon écrit à partir d'un contenu repéré (actualité, signet, compte suivi)."],
   ["reply", "Réponses", "Pour répondre à un post : ce que la réponse doit apporter."],
   ["quote", "Citations", "Pour citer un post : comment ajouter votre angle."],
@@ -539,6 +585,24 @@ function mixLine(name) {
 }
 
 const RULE_STATUS = { proposed: ["Proposée", "warn"], accepted: ["En place", "ok"], refused: ["Refusée", ""], revoked: ["Retirée", ""] };
+const FB_SOURCE = { edit: "Correction", rewrite: "Réécriture", reject: "Rejet", manual: "Leçon", "": "Leçon" };
+function feedbackList() {
+  const ls = (S.learnings || []).slice().reverse(), shown = ls.slice(0, +store.get("fbAll", 0) ? ls.length : 30);
+  if (!ls.length) return "";
+  const cats = S.feedbackCategories || {};
+  const body = l => l.source === "edit" && l.before
+    ? `<div class="fb-diff"><div><span class="small faint">IA</span> ${esc(l.before)}</div><div><span class="small faint">Vous</span> ${esc(l.after)}</div></div>`
+    : `<div>${esc(l.text)}</div>`;
+  return `<h3 style="margin-top:18px">Vos derniers retours</h3><div class="fb-list">${shown.map(l => `<div class="fb ${l.ignored ? "off" : ""}">
+    <div class="fb-head"><span class="pill ${l.source === "edit" ? "accent" : ""}">${FB_SOURCE[l.source || ""]}</span>
+      <span class="small muted">${fmtDate(l.createdAt, { dateStyle: "short" })} · ${l.account ? "@" + esc(handleOf(l.account)) : "tous les comptes"}${l.postId ? ` · post ${esc(l.postId)}` : ""}${l.synthesizedAt ? " · synthétisé" : ""}</span>
+      <span class="spacer"></span><button class="btn ghost sm" data-act="unlearn" data-id="${l.id}" title="Supprimer ce retour" aria-label="Supprimer ce retour">✕</button></div>
+    ${body(l)}
+    <div class="row" style="margin-top:8px"><select data-fb-cat="${l.id}" style="width:auto" aria-label="Catégorie du retour"><option value="">Sans catégorie</option>${Object.entries(cats).map(([k, v]) => `<option value="${k}" ${l.category === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      <label class="toggle small"><input type="checkbox" data-act="fb-ignore" data-id="${l.id}" ${l.ignored ? "checked" : ""}><span class="sw"></span>Ne pas apprendre</label></div></div>`).join("")}</div>
+    ${ls.length > shown.length ? `<button class="btn ghost sm" style="margin-top:8px" data-act="fb-all">Voir les ${ls.length} retours</button>` : ""}`;
+}
+
 function rulesBlock() {
   const rules = S.rules || [], pending = (S.learnings || []).filter(l => !l.synthesizedAt).length;
   const scope = r => r.account ? "@" + esc(handleOf(r.account)) : "Tous";
@@ -587,14 +651,19 @@ function vSettings(v) {
       <label class="l">Concurrents jamais nommés</label><input id="comp" value="${esc((s.competitors || []).join(", "))}" placeholder="Acme, Globex"><div class="hint">Un post qui en nomme un est bloqué à la validation et juste avant l'envoi.</div>
       <label class="l">Expressions interdites</label><input id="ban" value="${esc((s.bannedPhrases || []).join(", "))}" placeholder="révolutionnaire, game changer">
       <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" data-act="guards-save">Enregistrer</button></div></div>
-    <h2>Leçons et règles apprises</h2>
-    <div class="card"><p class="small muted" style="margin-top:0">Ajoutées à chaque demande à l'IA. Vos retours de réécriture et motifs de rejet arrivent ici automatiquement.</p>
+    <h2>Vos retours et règles apprises</h2>
+    <div class="card"><p class="small muted" style="margin-top:0">Relus par l'IA avant chaque rédaction. Vos corrections à la main, demandes de réécriture et motifs de rejet arrivent ici d'eux-mêmes ; vous pouvez aussi noter une leçon.</p>
       <div class="row"><select id="la" style="width:auto"><option value="">Tous les comptes</option>${S.accounts.map(a => `<option value="${esc(a.name)}">@${esc(a.handle || a.name)}</option>`).join("")}</select><input id="lt" placeholder="Ex. : jamais de question rhétorique en accroche" style="flex:1;width:auto"><button class="btn" data-act="learn">Ajouter</button></div>
-      ${(S.learnings || []).length ? `<table style="margin-top:12px">${S.learnings.slice().reverse().map(l => `<tr><td class="small muted" style="width:120px">${l.account ? "@" + esc(handleOf(l.account)) : "Tous"}</td><td>${esc(l.text)}${l.synthesizedAt ? ` <span class="small faint">· synthétisé</span>` : ""}</td><td style="width:40px"><button class="btn ghost sm" data-act="unlearn" data-id="${l.id}">✕</button></td></tr>`).join("")}</table>` : ""}
+      ${feedbackList()}
       ${rulesBlock()}</div>
     <h2>Journal</h2>
     <div class="card" style="padding:6px 8px;max-height:320px;overflow:auto"><table>${(S.log || []).slice().reverse().map(e => `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(e.at, { dateStyle: "short", timeStyle: "short" })}</td><td><span class="pill ${e.level === "error" ? "bad" : ""}">${e.level}</span></td><td class="small">${esc(e.message)}</td></tr>`).join("") || `<tr><td class="muted">Rien pour l'instant.</td></tr>`}</table></div>`;
   $$("[data-setting]", v).forEach(i => i.onchange = () => run(null, () => api("/api/settings", { [i.dataset.setting]: i.checked }), "Réglage enregistré"));
+  $$("[data-fb-cat]", v).forEach(sel => sel.onchange = () => run(null, () => api(`/api/learnings/${sel.dataset.fbCat}`, { category: sel.value }), "Catégorie enregistrée"));
+  $$("[data-timing-mode]", v).forEach(sel => sel.onchange = () => {
+    const card = sel.closest(".card");
+    $$("[data-timing]", card).forEach(x => x.classList.toggle("hidden", x.dataset.timing !== sel.value));
+  });
   $$("[data-types]", v).forEach(syncTypesEmpty);
 }
 
@@ -610,11 +679,29 @@ function accountForm(a) {
         <div><label class="l">Connexion</label><select name="backend">${["agentx", "xapi", "dryrun"].map(b => `<option value="${b}" ${a.backend === b ? "selected" : ""}>${{ agentx: "AgentX (session X)", xapi: "API X officielle", dryrun: "Simulation" }[b]}</option>`).join("")}</select></div>
         <div><label class="l">Session agentx</label><input name="agentxAccount" value="${esc(a.agentxAccount || "")}"></div>
         <div><label class="l">Variable du jeton API X</label><input name="xapiTokenEnv" value="${esc(a.xapiTokenEnv || "")}" placeholder="X_USER_TOKEN"></div>
-        <div><label class="l">Fuseau horaire</label><input name="timezone" value="${esc(a.timezone)}"></div>
-        <div><label class="l">Créneaux</label><input name="slots" value="${esc((a.slots || []).join(", "))}"></div>
-        <div><label class="l">Posts max par jour</label><input name="dailyLimit" type="number" value="${a.dailyLimit || 6}"></div>
-        <div><label class="l">Langue</label><input name="language" value="${esc(a.language || "")}"></div></div>
-      <label class="l">Voix</label><textarea name="voice">${esc(a.voice)}</textarea>
+        <div><label class="l">Fuseau horaire</label><input name="timezone" value="${esc(a.timezone)}"></div></div>
+      <h3 style="margin-top:20px">Profil</h3>
+      <div class="grid"><div><label class="l">Rôle</label><select name="role">${ROLES.map(([k, l]) => `<option value="${k}" ${(a.role || "personnel") === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <div class="hint">Change la façon d'écrire : « je », « nous » ou un style neutre.</div></div>
+        <div><label class="l">Nom affiché</label><input name="displayName" value="${esc(a.displayName || "")}" placeholder="Nom visible sur X"></div>
+        <div><label class="l">Langue des posts</label><select name="language">${langOptions(a.language)}</select><div class="hint">Une seule langue par compte.</div></div></div>
+      <label class="toggle" style="margin-top:12px"><input type="checkbox" name="automated" ${a.automated ? "checked" : ""}><span class="sw"></span>Compte ouvertement automatisé</label>
+      <h3 style="margin-top:20px">IA de ce compte</h3>
+      <div class="grid"><div><label class="l">Fournisseur</label><select name="aiProvider"><option value="">Comme les réglages (${esc(providerName(S.ai?.provider))})</option>${(P || []).map(p => `<option value="${p.id}" ${a.aiProvider === p.id ? "selected" : ""}>${esc(p.name)}${p.available ? "" : " (non disponible)"}</option>`).join("")}</select></div>
+        <div><label class="l">Modèle</label><input name="aiModel" value="${esc(a.aiModel || "")}" placeholder="Vide : modèle par défaut"></div></div>
+      <h3 style="margin-top:20px">Programmation</h3>
+      <div class="grid"><div><label class="l">Mode</label><select name="timing.mode" data-timing-mode><option value="slots" ${a.timing?.mode !== "window" ? "selected" : ""}>Créneaux fixes</option><option value="window" ${a.timing?.mode === "window" ? "selected" : ""}>Plage horaire, écarts au hasard</option></select></div>
+        <div><label class="l">Posts max par jour</label><input name="dailyLimit" type="number" min="0" value="${a.dailyLimit || 6}"></div></div>
+      <div data-timing="slots" class="${a.timing?.mode === "window" ? "hidden" : ""}"><label class="l">Créneaux</label><input name="slots" value="${esc((a.slots || []).join(", "))}"><div class="hint">Un post validé prend le prochain créneau libre.</div></div>
+      <div data-timing="window" class="${a.timing?.mode === "window" ? "" : "hidden"}"><div class="grid">
+        <div><label class="l">Début de la plage</label><input name="timing.start" type="time" value="${esc(a.timing?.start || "08:00")}"></div>
+        <div><label class="l">Fin de la plage</label><input name="timing.end" type="time" value="${esc(a.timing?.end || "22:00")}"></div>
+        <div><label class="l">Écart minimum (min)</label><input name="timing.gapMin" type="number" min="1" value="${a.timing?.gapMin || 30}"></div>
+        <div><label class="l">Écart maximum (min)</label><input name="timing.gapMax" type="number" min="1" value="${a.timing?.gapMax || 60}"></div>
+        <div><label class="l">Aléa du premier post (± min)</label><input name="timing.jitter" type="number" min="0" max="120" value="${a.timing?.jitter ?? 15}"></div></div>
+        <div class="hint">Un post validé sans date se cale après le dernier post du jour, avec un écart tiré au hasard ; s'il n'y en a pas encore, il part tout de suite si l'on est dans la plage.</div></div>
+      <div class="row between" style="margin-top:14px"><label class="l" style="margin:0">Voix</label><button class="btn ghost sm" data-act="voice-template">Insérer le modèle structuré</button></div>
+      <textarea name="voice" rows="8" placeholder="Ton, phrases types, ce qu'on ne dit jamais, exemples… (texte long accepté)">${esc(a.voice)}</textarea>
       <label class="l">Consignes</label><textarea name="instructions">${esc(a.instructions)}</textarea>
       <label class="l">Sujets</label><input name="topics" value="${esc((a.topics || []).join(", "))}">
       <label class="l">Critères de tri de la veille</label><textarea name="triageRules">${esc(a.triageRules)}</textarea>
@@ -629,6 +716,12 @@ function accountForm(a) {
           <div class="hint">Sans X Premium, la limite reste 280 caractères.</div></div></div>
         <label class="l">Posts de référence</label><textarea name="examples" rows="5" placeholder="Collez des posts dont vous aimez le style (les vôtres ou ceux d'autres), séparés par une ligne contenant seulement ---">${esc((a.examples || []).join("\n---\n"))}</textarea>
         <div class="hint">10 au plus. L'IA s'inspire de leur ton et de leur rythme sans les recopier.</div>
+        <h3 style="margin-top:20px">Banque d'idées</h3>
+        <label class="toggle"><input type="checkbox" name="ideas.enabled" ${a.ideas?.enabled ? "checked" : ""}><span class="sw"></span>Proposer des idées de posts originaux</label>
+        <label class="l">Sujets des réflexions</label><textarea name="ideas.themes" rows="3" placeholder="Un sujet par ligne (vide : les sujets du compte)">${esc((a.ideas?.themes || []).join("\n"))}</textarea>
+        <div class="grid"><div><label class="l">Idées proposées par demande</label><input name="ideas.perRequest" type="number" min="1" max="12" value="${a.ideas?.perRequest || 5}"></div></div>
+        <label class="toggle" style="margin-top:12px"><input type="checkbox" name="ideas.autoDraft" ${a.ideas?.autoDraft ? "checked" : ""}><span class="sw"></span>Rédiger directement les idées proposées</label>
+        <div class="hint">Les consignes « Suggestion d'idées » et « Post tiré d'une idée » se règlent plus bas.</div>
         <h3 style="margin-top:20px">Types de posts de ce compte</h3>
         ${typesEditor(a.postTypes, `Vide : les types communs s'appliquent (${(S.settings.postTypes || []).length || "aucun"}).`)}${mixLine(a.name)}
         <h3 style="margin-top:20px">Consignes propres à ce compte</h3><p class="small muted" style="margin-top:0">Vide : la consigne commune (ou par défaut), affichée en grisé.</p>
@@ -639,8 +732,15 @@ function accountForm(a) {
 
 function readAccountForm(card, base) {
   const o = { ...base };
+  o.timing = { ...(base.timing || {}) }; o.ideas = { ...(base.ideas || {}) };
   $$("[name]", card).forEach(i => {
     const k = i.name;
+    if (k.includes(".")) {
+      const [g, f] = k.split("."), v = i.value.trim();
+      o[g][f] = i.type === "checkbox" ? i.checked : f === "themes" ? v.split("\n").map(x => x.trim()).filter(Boolean)
+        : i.type === "number" ? (v === "" ? null : +v) : v;
+      return;
+    }
     if (i.type === "checkbox") o[k] = i.checked;
     else if (k === "slots" || k === "topics") o[k] = i.value.split(",").map(x => x.trim()).filter(Boolean);
     else if (k === "dailyLimit") o[k] = +i.value;
@@ -727,6 +827,17 @@ const actions = {
     const L = id => $(id).value.split(",").map(x => x.trim()).filter(Boolean);
     await run(b, () => api("/api/settings", { minGapMinutes: +$("#gap").value, triageMinScore: +$("#tmin").value, maxItemsPerRun: +$("#maxi").value, competitors: L("#comp"), bannedPhrases: L("#ban") }), "Garde-fous enregistrés");
   },
+  async "voice-template"(b) {
+    const ta = b.closest(".card").querySelector("[name=voice]");
+    if (ta.value.trim() && !confirm("Ajouter le modèle à la suite de la voix actuelle ?")) return;
+    ta.value = ta.value.trim() ? ta.value.trim() + "\n\n" + VOICE_TEMPLATE : VOICE_TEMPLATE; dirty = true; ta.focus();
+  },
+  async "fb-all"() { store.set("fbAll", 1); render() },
+  async "fb-ignore"(b) { await run(null, () => api(`/api/learnings/${b.dataset.id}`, { ignored: b.checked })) },
+  async "idea-suggest"(b) { await run(b, () => api("/api/ideas/suggest", { account: $("#idea-acc").value }), r => `${r.length} idée(s) proposée(s)`, { wait: "Réflexion…" }) },
+  async "idea-keep"(b) { await run(b, () => api(`/api/ideas/${b.dataset.id}/keep`, {}), "Idée retenue") },
+  async "idea-dismiss"(b) { await run(b, () => api(`/api/ideas/${b.dataset.id}/dismiss`, {}), "Idée écartée") },
+  async "idea-draft"(b) { await run(b, () => api(`/api/ideas/${b.dataset.id}/draft`, {}), "Post rédigé : il attend dans « À valider »", { wait: "Écriture…" }) },
   async "tune-save"(b) {
     const box = $("#tune-common");
     await run(b, () => api("/api/settings", { rules: $("#rules").value.split("\n").map(x => x.trim()).filter(Boolean), prompts: readPrompts(box), postTypes: readTypes(box) }), "Réglages de l'IA enregistrés");
