@@ -388,17 +388,16 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 	}
 	err := s.store.Update(func(d *Data) error {
 		for _, p := range todo {
-			// textes déjà connus pour ce compte, de tout statut : règles
-			// communes, règles apprises sans compte et règles du compte (les
-			// mêmes que celles montrées à l'IA dans <regles_existantes>)
+			// textes déjà connus, de tout statut et de tout compte, comme
+			// dans Synthesize : une règle refusée pour un compte n'est pas
+			// reproposée pour un autre (le prompt, lui, reste limité aux
+			// règles pertinentes pour le compte)
 			existing := map[string]bool{}
 			for _, r := range d.Settings.Rules {
 				existing[strings.ToLower(strings.TrimSpace(r))] = true
 			}
 			for _, r := range d.RuleProposals {
-				if r.Account == "" || strings.EqualFold(r.Account, p.res.Account) {
-					existing[strings.ToLower(strings.TrimSpace(r.Text))] = true
-				}
+				existing[strings.ToLower(strings.TrimSpace(r.Text))] = true
 			}
 			signals := map[string]PerfSignal{}
 			for _, sg := range p.dg.Signals {
@@ -426,9 +425,13 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 				if len(keys) == 0 {
 					continue
 				}
-				// 2. texte sûr ; 3. pas déjà connu ; 4. plafond par analyse
+				// 2. texte sûr, vérifié tel que l'IA l'a rendu (avant toute
+				// normalisation) ; 3. pas déjà connu ; 4. plafond par analyse
+				if ruleTextOK(o.Text) != nil {
+					continue
+				}
 				text := strings.TrimSpace(o.Text)
-				if ruleTextOK(text) != nil || existing[strings.ToLower(text)] || len(p.res.Proposed) >= perfMaxProposals {
+				if existing[strings.ToLower(text)] || len(p.res.Proposed) >= perfMaxProposals {
 					continue
 				}
 				existing[strings.ToLower(text)] = true
@@ -446,7 +449,11 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 				d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), %d règle(s) proposée(s)", ar.Eligible, len(ar.Proposed))
 			}
 		}
-		d.Settings.LastPerfAnalysisAt = &now
+		// une analyse lancée plus tôt qui finit après une autre ne fait pas
+		// reculer la date (elle sert au déclenchement hebdomadaire)
+		if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
+			d.Settings.LastPerfAnalysisAt = &now
+		}
 		return nil
 	})
 	if err != nil {

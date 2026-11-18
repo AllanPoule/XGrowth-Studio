@@ -538,6 +538,9 @@ func TestAnalyzeDropsInvalidProposals(t *testing.T) {
 			{"text": "Privilégie\u200b les listes", "rationale": "x", "signals": ok},
 			{"text": "Privilégie " + strings.Repeat("a", 240), "rationale": "x", "signals": ok},
 			{"text": "Remercie @nom", "rationale": "x", "signals": ok},
+			// le texte brut est vérifié avant le TrimSpace de stockage
+			{"text": "Privilégie les fils courts\n", "rationale": "x", "signals": ok},
+			{"text": strings.Repeat("b", 240) + " ", "rationale": "x", "signals": ok},
 			{"text": "Privilégie ce qui marche pour TYPE:UTILE", "rationale": "doublon de cette analyse", "signals": ok},
 			{"text": "Favorise les exemples concrets", "rationale": "valide", "signals": ok},
 			{"text": "Favorise les méthodes pas à pas", "rationale": "valide mais au-delà de 3", "signals": ok},
@@ -608,12 +611,36 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 	}
 	perfFixture(t, e, "main")
 	perfFixture(t, e, "second")
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Settings.Rules = []string{"Règle commune fictive"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// en plus des propositions par défaut (mêmes textes pour les deux
+	// comptes), une règle propre à chaque compte et une règle déjà en place
+	e.ai.perf = func(user string) []map[string]any {
+		own := "Règle propre au compte main"
+		if strings.Contains(user, "second_") {
+			own = "Règle propre au compte second"
+		}
+		return []map[string]any{
+			{"text": "  RÈGLE COMMUNE FICTIVE ", "rationale": "x", "signals": []string{"type:utile"}},
+			{"text": own, "rationale": "x", "signals": []string{"type:utile"}},
+		}
+	}
 	res, err := e.st.AnalyzePerformance(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if e.ai.calls != 2 || len(res.Accounts) != 3 {
 		t.Fatalf("%d appel(s) IA pour %d compte(s), attendu 2 pour 3", e.ai.calls, len(res.Accounts))
+	}
+	// les textes proposés à « main » ne sont pas reproposés à « second » :
+	// le dédoublonnage vaut pour tous les comptes (critère 5 du ticket)
+	wantTexts := map[string][]string{
+		"main":   {"Privilégie ce qui marche pour source:veille", "Privilégie ce qui marche pour type:utile", "Règle propre au compte main"},
+		"second": {"Règle propre au compte second"},
 	}
 	for _, ar := range res.Accounts {
 		if ar.Account == "vide" {
@@ -632,12 +659,16 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 				}
 			}
 		}
-		if len(ar.Proposed) != 2 {
-			t.Errorf("%s : %d règle(s), attendu 2", ar.Account, len(ar.Proposed))
+		var got []string
+		for _, r := range ar.Proposed {
+			got = append(got, r.Text)
+		}
+		sort.Strings(got)
+		if strings.Join(got, "|") != strings.Join(wantTexts[ar.Account], "|") {
+			t.Errorf("%s : règles %q, attendu %q", ar.Account, got, wantTexts[ar.Account])
 		}
 	}
-	// une règle refusée pour « second » n'empêche pas « main » de la recevoir
-	// (et inversement) : le dédoublonnage vaut par compte
+	// une règle refusée pour « second » n'est pas reproposée à « main »
 	if err := e.st.store.Update(func(d *Data) error {
 		d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: "r_second", Account: "second", Text: "Favorise les exemples concrets", Status: RuleRefused})
 		return nil
@@ -652,9 +683,8 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ar := range res.Accounts {
-		want := map[string]int{"main": 1, "second": 0, "vide": 0}[ar.Account]
-		if len(ar.Proposed) != want {
-			t.Errorf("seconde analyse, %s : %d règle(s), attendu %d", ar.Account, len(ar.Proposed), want)
+		if len(ar.Proposed) != 0 {
+			t.Errorf("seconde analyse, %s : %d règle(s), attendu 0", ar.Account, len(ar.Proposed))
 		}
 	}
 	// une ligne de journal par compte et par analyse
@@ -666,5 +696,37 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 	}
 	if n != 6 {
 		t.Errorf("%d ligne(s) de journal, attendu 6", n)
+	}
+}
+
+// Une analyse lancée plus tôt qui finit après une autre ne fait pas reculer
+// LastPerfAnalysisAt (qui sert au déclenchement hebdomadaire).
+func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	early := e.now
+	late := early.Add(time.Minute)
+	nested := false
+	e.ai.perf = func(string) []map[string]any {
+		if !nested {
+			// pendant l'appel IA de la première analyse, une seconde
+			// analyse démarre plus tard et se termine avant elle
+			nested = true
+			e.now = late
+			if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
+				t.Error(err)
+			}
+		}
+		return nil
+	}
+	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	if e.ai.calls != 2 {
+		t.Fatalf("%d appel(s) IA, attendu 2", e.ai.calls)
+	}
+	got := e.st.store.Snapshot().Settings.LastPerfAnalysisAt
+	if got == nil || !got.Equal(late) {
+		t.Errorf("LastPerfAnalysisAt = %v, attendu %v (pas %v)", got, late, early)
 	}
 }
