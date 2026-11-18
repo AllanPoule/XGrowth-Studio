@@ -38,7 +38,7 @@ XGrowth Studio est un binaire unique (Go, aucune base de données externe) qui s
 | ✅ **Validation** | File « À valider » façon X : aperçu, compteur de caractères, retouche, validation signée, planification au prochain créneau libre ou à l'heure choisie. |
 | 🛡️ **Garde-fous** | Concurrents jamais nommés, expressions interdites, limite de longueur, pas de doublon, limite quotidienne, écart minimal entre deux posts. Tout est revérifié juste avant l'envoi, ainsi que l'identité du compte X connecté. |
 | 📡 **Veille** | Comptes et recherches X suivis, import des signets, tri par l'IA (score, raison, angle) et brouillons automatiques facultatifs. |
-| 📅 **Calendrier** | Vue semaine, file de publication, publication automatique par le planificateur. |
+| 📅 **Calendrier** | Vue semaine, file de publication, publication automatique par le planificateur. Glisser-déposer sur l'accueil (« Prochains posts ») et dans le calendrier : réordonner la file, valider un brouillon en le déposant à sa place, déplacer un post sur un autre jour. Les heures suivent toujours la programmation du compte. |
 | 📈 **Performances** | Vues, likes, reposts, réponses, taux d'engagement. Les meilleurs posts guident l'IA. |
 | 🔐 **Sécurité** | Mot de passe créé avec un code d'installation à usage unique, sessions révocables, noms d'hôte autorisés, CLI d'IA lancées **sans aucun outil**. |
 | 🤖 **Pilotable par agent** | Chaque commande CLI renvoie une enveloppe JSON, comme [AgentX](https://github.com/DezXBT/AgentX). `SKILL.md` décrit l'outil à un agent. |

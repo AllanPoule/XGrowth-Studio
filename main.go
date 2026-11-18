@@ -24,7 +24,7 @@ import (
 )
 
 // Une version par pull request fusionnée (voir CHANGELOG.md).
-const version = "0.08"
+const version = "0.09"
 
 var pretty bool
 
@@ -339,6 +339,16 @@ func main() {
 
 	case "unschedule":
 		p, err := st.Unschedule(need(a, 0, "unschedule <id>"))
+		check(err)
+		emit(p)
+
+	case "reorder":
+		ps, err := st.ReorderQueue(a.pos)
+		check(err)
+		emit(ps)
+
+	case "move":
+		p, err := st.MoveToDay(need(a, 0, "move <id> <AAAA-MM-JJ>"), need(a, 1, "move <id> <AAAA-MM-JJ>"))
 		check(err)
 		emit(p)
 
@@ -1067,6 +1077,8 @@ CAMPAGNES DE RÉPONSES (prospection ; rien ne part sans validation)
 VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   validate <id> --by <nom> [--at "2026-11-20 09:00" | --at +2h | --now]
   reject <id> [--reason "..."] | unschedule <id>
+  reorder <id> <id>…                     nouvel ordre de posts planifiés (chaque compte garde ses heures)
+  move <id> <AAAA-MM-JJ>                 premier créneau libre de ce jour, selon la programmation du compte
   calendar [--days 14]
   publish-due                            publie ce qui est dû (un passage)
   metrics                                rafraîchit les statistiques des posts publiés

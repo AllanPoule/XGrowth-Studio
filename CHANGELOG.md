@@ -4,6 +4,22 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.09 — 18 novembre 2026
+
+[PR n°9](https://github.com/AllanPoule/XGrowth-Studio/pull/9) · Glisser-déposer la file de publication
+
+### Ajouté
+- **Prochains posts** sur l'accueil : les tuiles se réordonnent par glisser-déposer, et un brouillon déposé dans la
+  liste est validé (signé) puis inséré à cet endroit.
+- **Calendrier** : une tuile déposée sur un autre jour est calée au premier créneau libre de ce jour ; la file de
+  publication se réordonne aussi.
+- CLI : `reorder <id> <id>…` et `move <id> <AAAA-MM-JJ>`.
+
+### Modifié
+- Les heures suivent toujours la programmation du compte : réordonner redistribue les heures déjà calculées, sans
+  en inventer.
+- Les réponses de campagne suivent le rythme de leur campagne : elles ne se glissent ni ne se mélangent aux posts.
+
 ## V0.08 — 18 novembre 2026
 
 [PR n°8](https://github.com/AllanPoule/XGrowth-Studio/pull/8) · Sources
