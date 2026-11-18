@@ -1,0 +1,21 @@
+# Service systemd pour XGrowth Studio.
+# User : l'utilisateur qui a connecté Claude Code / Codex (leurs identifiants sont dans son dossier personnel).
+# --host : le nom sous lequel vous ouvrez le studio (ex. studio.exemple.fr).
+[Unit]
+Description=XGrowth Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGEZ-MOI
+Environment=XGROWTH_HOME=%h/.xgrowth
+Environment=PATH=/opt/xgrowth/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/xgrowth/xgrowth serve --addr 127.0.0.1:18790 --host studio.exemple.fr
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
