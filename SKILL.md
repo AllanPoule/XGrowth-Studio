@@ -38,6 +38,18 @@ triage [--account a] [--draft]    Claude scores pending items; --draft writes a 
 item keep|ignore <id>
 ```
 
+## Reply campaigns (prospecting)
+
+```
+campaign list                              campaigns, replies sent today, replies waiting
+campaign run <id>                          search, qualify and draft replies now (uses the search budget)
+campaign candidates [<id>] [--status new|drafted|dismissed]
+comments [--campaign id] [--status draft]  replies drafted by campaigns
+```
+
+Campaign replies are drafts like any other: never validate them. Create or edit a campaign (`campaign save`) only
+when the human asks; an active pain needs a verified solution.
+
 ## Draft
 
 ```

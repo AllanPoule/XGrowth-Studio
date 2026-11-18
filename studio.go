@@ -477,7 +477,8 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 	gap := time.Duration(d.Settings.MinGapMinutes) * time.Minute
 	var taken []time.Time
 	for _, p := range d.Posts {
-		if p.Account != a.Name || p.ID == skipID {
+		// les réponses de campagne ont leur propre rythme
+		if p.Account != a.Name || p.ID == skipID || p.CampaignID != "" {
 			continue
 		}
 		switch {
@@ -558,6 +559,16 @@ func (s *Studio) Validate(id, by string, at *time.Time, now bool) (*Post, error)
 			}
 			u := at.UTC()
 			p.Status, p.ScheduledAt = StatusScheduled, &u
+		case p.CampaignID != "":
+			c := d.Campaign(p.CampaignID)
+			if c == nil {
+				return errors.New("la campagne de cette réponse a été supprimée : choisissez l'heure ou publiez maintenant")
+			}
+			slot, err := nextReplySlot(d, a, c, t, p.ID)
+			if err != nil {
+				return err
+			}
+			p.Status, p.ScheduledAt = StatusScheduled, &slot
 		default:
 			slot, err := NextSlot(d, a, t, p.ID)
 			if err != nil {
@@ -580,7 +591,7 @@ func publishedToday(d *Data, a *Account, now time.Time) int {
 	today := now.In(loc).Format("2006-01-02")
 	n := 0
 	for _, p := range d.Posts {
-		if p.Account == a.Name && p.Status == StatusPublished && p.PublishedAt != nil && p.PublishedAt.In(loc).Format("2006-01-02") == today {
+		if p.Account == a.Name && p.CampaignID == "" && p.Status == StatusPublished && p.PublishedAt != nil && p.PublishedAt.In(loc).Format("2006-01-02") == today {
 			n++
 		}
 	}
@@ -633,7 +644,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				skip = p.Error
 				return nil
 			}
-			if a.DailyLimit > 0 && publishedToday(d, a, s.now()) >= a.DailyLimit {
+			if p.CampaignID == "" && a.DailyLimit > 0 && publishedToday(d, a, s.now()) >= a.DailyLimit {
 				next, err := NextSlot(d, a, s.now().UTC(), p.ID)
 				if err != nil {
 					p.Status, p.Error = StatusFailed, "limite quotidienne atteinte et aucun créneau libre"
@@ -957,6 +968,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
+	}
+	if r := s.RunCampaigns(ctx); len(r) > 0 {
+		out["campaigns"] = r
 	}
 	if synthesisDue(s.store.Snapshot(), s.now()) {
 		if r, err := s.Synthesize(ctx, ""); err == nil {

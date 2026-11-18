@@ -447,7 +447,8 @@ func nextWindowSlot(d *Data, a *Account, after time.Time, skipID string) (time.T
 	loc := location(a)
 	var taken []time.Time
 	for _, p := range d.Posts {
-		if p.Account != a.Name || p.ID == skipID {
+		// les réponses de campagne ont leur propre rythme
+		if p.Account != a.Name || p.ID == skipID || p.CampaignID != "" {
 			continue
 		}
 		switch {

@@ -116,6 +116,44 @@ compte, puis commun, puis une valeur par défaut neutre, affichée en grisé.
 ./xgrowth learnings set <id> --category ton --ignore
 ```
 
+## Campagnes de réponses
+
+L'onglet **Commentaires** répond aux posts qui expriment une douleur que vous savez résoudre (prospection). Une
+campagne appartient à un compte et décrit des **douleurs** :
+
+- la douleur, avec les mots du lecteur ;
+- les recherches X qui la trouvent, une par ligne ;
+- des exemples qui correspondent ou non ;
+- la **solution** concrète et l'endroit où elle a été **vérifiée** (obligatoires pour une douleur active), plus une preuve facultative.
+
+Ses réglages :
+
+| Réglage | Défaut |
+| --- | --- |
+| Réponses par jour | 10 |
+| Minutes entre deux réponses | 15 |
+| Jours avant de répondre de nouveau au même auteur | 7 |
+| Budget de recherche (recherches X par jour) | 12 |
+| Fenêtre horaire (`HH-HH`) | toute la journée |
+| Plafond d'abonnés de l'auteur | aucun |
+| Notes | — |
+
+Le planificateur fait tourner chaque campagne active au plus une fois par heure, dans sa fenêtre. Il écarte les
+reposts, vos propres posts, les auteurs trop suivis et ceux à qui une réponse a été rédigée récemment. L'IA qualifie
+ensuite chaque post selon la **Consigne des commentaires** (réglable, avec une valeur par défaut prudente : aider
+d'abord, transparence, pas d'URL ni de concurrent) et rédige la réponse.
+
+Les réponses arrivent dans **À valider**, puis passent dans **Envoyés** ou **Écartés**, avec le compteur
+« N / 10 envoyée(s) aujourd'hui ». Validée, une réponse part au plus tôt en respectant l'écart, le maximum du jour et la
+fenêtre de sa campagne, sans occuper les créneaux des posts du compte. **Rien ne part sans validation.**
+
+```bash
+./xgrowth campaign save campagne.json      # crée (sans id) ou met à jour
+./xgrowth campaign run <id> --pretty       # cherche et rédige maintenant
+./xgrowth comments --status draft          # réponses à valider
+./xgrowth settings --comments-prompt "…"   # consigne des commentaires
+```
+
 ## Connexion à X
 
 | Mode | Ce qu'il faut | Remarques |

@@ -103,8 +103,10 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
 			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "ideas": orEmpty(d.Ideas),
 			"feedbackCategories": FeedbackCategories,
-			"defaults":           map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
-			"log":                orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
+			"campaigns":          orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
+			"commentsDefault": DefaultCommentsPrompt,
+			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
+			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
@@ -311,6 +313,26 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		l := Learning{ID: newID("l"), Account: s(b, "account"), Text: s(b, "text"), Source: FeedbackManual, CreatedAt: time.Now().UTC()}
 		return l, st.store.Update(func(d *Data) error { d.Learnings = append(d.Learnings, l); return nil })
 	})
+	// ---- campagnes de réponses
+	post("/api/campaigns", func(r *http.Request, b map[string]any) (any, error) {
+		raw, _ := json.Marshal(b)
+		var c Campaign
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return nil, err
+		}
+		return st.SaveCampaign(&c)
+	})
+	post("/api/campaigns/{id}/remove", func(r *http.Request, b map[string]any) (any, error) {
+		return nil, st.RemoveCampaign(r.PathValue("id"))
+	})
+	post("/api/campaigns/{id}/run", func(r *http.Request, b map[string]any) (any, error) {
+		res := st.RunCampaign(r.Context(), r.PathValue("id"), true)
+		if res.Error != "" && res.Searches == 0 && res.Found == 0 && res.Qualified == 0 {
+			return nil, errors.New(res.Error)
+		}
+		return res, nil
+	})
+
 	// ---- règles apprises (synthèse des retours)
 	post("/api/rules/synthesize", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Synthesize(r.Context(), s(b, "account"))
