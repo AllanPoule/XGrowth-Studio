@@ -17,6 +17,9 @@ type fakeAI struct {
 	lastSys    string
 	lastMsg    string
 	lastSchema map[string]any
+	// perf : propositions ajoutées à la réponse d'une analyse des performances
+	// (pour tester la validation côté serveur)
+	perf func(user string) []map[string]any
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
@@ -89,6 +92,21 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 			res = append(res, map[string]any{"id": id, "score": score, "keep": keep, "reason": "test", "angle": "angle"})
 		}
 		resp = map[string]any{"results": res}
+	case props["proposals"] != nil:
+		// une proposition par clé de signal lue dans <signaux> (« - [type:utile] … »)
+		var list []map[string]any
+		block := user
+		if i, j := strings.Index(user, "<signaux>"), strings.Index(user, "</signaux>"); i >= 0 && j > i {
+			block = user[i:j]
+		}
+		for _, part := range strings.Split(block, "- [")[1:] {
+			key := part[:strings.Index(part, "]")]
+			list = append(list, map[string]any{"text": "Privilégie ce qui marche pour " + key, "rationale": "test", "signals": []string{key}})
+		}
+		if f.perf != nil {
+			list = append(list, f.perf(user)...)
+		}
+		resp = map[string]any{"proposals": list}
 	default:
 		resp = map[string]string{"text": "Texte réécrit", "rationale": "plus court"}
 	}
