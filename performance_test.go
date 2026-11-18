@@ -12,6 +12,7 @@ import (
 // measured décrit un post publié et mesuré (données fictives).
 type measured struct {
 	id, kind, postType, text, sourceItem string
+	account                              string // vide = « main »
 	rate                                 float64
 	views                                int
 	measuredAfter                        time.Duration // délai entre la publication et le relevé
@@ -19,7 +20,7 @@ type measured struct {
 	noMetrics                            bool
 }
 
-// publish ajoute des posts publiés et mesurés au compte « main ».
+// publish ajoute des posts publiés et mesurés (au compte « main » par défaut).
 func (e *env) publish(t *testing.T, ms ...measured) {
 	t.Helper()
 	if err := e.st.store.Update(func(d *Data) error {
@@ -27,6 +28,9 @@ func (e *env) publish(t *testing.T, ms ...measured) {
 			pub := e.now.Add(-10 * 24 * time.Hour)
 			p := &Post{ID: m.id, Account: "main", Kind: m.kind, Text: m.text, Status: StatusPublished, PublishedAt: &pub,
 				TweetID: m.tweetID, SourceItem: m.sourceItem, PostType: m.postType, CreatedAt: pub, UpdatedAt: pub}
+			if m.account != "" {
+				p.Account = m.account
+			}
 			if p.Kind == "" {
 				p.Kind = "post"
 			}
@@ -101,6 +105,28 @@ func TestPerfDigestIgnoresUnmeasuredPosts(t *testing.T) {
 	e.publish(t, measured{id: "p_limit", rate: 4, views: perfMinViews, measuredAfter: perfMinAge})
 	if dg := e.digest(); dg.Eligible != 3 {
 		t.Fatalf("un post éligible de plus doit donner 3, pas %d", dg.Eligible)
+	}
+}
+
+func TestPerfDigestMatchesAccountCaseInsensitively(t *testing.T) {
+	e := newEnv(t)
+	e.publish(t,
+		measured{id: "p_lower", rate: 1},
+		measured{id: "p_title", rate: 3, account: "Main"},
+		measured{id: "p_upper", rate: 5, account: "MAIN"},
+		measured{id: "p_other", rate: 9, account: "autre"},
+	)
+	for _, name := range []string{"main", "Main", "MAIN"} {
+		dg := ComputePerfDigest(e.st.store.Snapshot(), name, e.now)
+		if dg.Eligible != 3 || dg.Baseline != 3 {
+			t.Fatalf("%q : les trois graphies de « main » doivent compter : %+v", name, dg)
+		}
+		if dg.Account != "main" {
+			t.Fatalf("%q : le résumé doit porter le nom enregistré du compte, pas %q", name, dg.Account)
+		}
+		if len(dg.Top) != 3 || dg.Top[0] != "p_upper" || dg.Bottom[0] != "p_lower" {
+			t.Fatalf("%q : classement inattendu : %+v", name, dg)
+		}
 	}
 }
 

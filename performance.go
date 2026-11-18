@@ -106,10 +106,15 @@ var perfSourceLabels = map[string]string{"veille": "posts tirés de la veille", 
 // dans les règles de calcul du §4.3.1 (l'âge du relevé se compare à la date de
 // publication) ; il est gardé pour la signature prévue par la spec.
 func ComputePerfDigest(d *Data, account string, now time.Time) PerfDigest {
+	// Les comptes se reconnaissent sans tenir compte de la casse, comme dans
+	// Data.Account : un brouillon créé pour « Main » appartient au compte « main ».
+	if a := d.Account(account); a != nil {
+		account = a.Name
+	}
 	dg := PerfDigest{Account: account, Signals: []PerfSignal{}, Top: []string{}, Bottom: []string{}}
 	var posts []*Post
 	for _, p := range d.Posts {
-		if p.Account == account && perfEligible(p) {
+		if strings.EqualFold(p.Account, account) && perfEligible(p) {
 			posts = append(posts, p)
 		}
 	}
