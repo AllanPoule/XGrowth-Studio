@@ -444,16 +444,7 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 		fmt.Fprintf(&u, "- [%s] (%s, %s) %s\n", l.ID, who, l.CreatedAt.Format("2006-01-02"), learningLine(l))
 	}
 	u.WriteString("</retours>\n")
-	if len(d.RuleProposals) > 0 || len(d.Settings.Rules) > 0 {
-		u.WriteString("\n<regles_existantes>\n")
-		for _, r := range d.Settings.Rules {
-			fmt.Fprintf(&u, "- (en place) %s\n", r)
-		}
-		for _, r := range d.RuleProposals {
-			fmt.Fprintf(&u, "- (%s) %s\n", map[string]string{RuleProposed: "proposée", RuleAccepted: "en place", RuleRefused: "refusée", RuleRevoked: "retirée"}[r.Status], r.Text)
-		}
-		u.WriteString("</regles_existantes>\n")
-	}
+	u.WriteString(existingRulesBlock(d, ""))
 	u.WriteString("\nPropose les règles (zéro si rien ne se dégage).")
 	var out synthesisOut
 	if err := s.aiFor(d.Account(account)).JSON(ctx, synthesisSystem, u.String(), synthesisSchema, &out); err != nil {
@@ -508,6 +499,31 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 		return nil
 	})
 	return res, err
+}
+
+// existingRulesBlock : règles communes et règles apprises de tous statuts,
+// présentées à l'IA pour qu'elle n'en repropose aucune. account vide = toutes
+// les règles apprises ; sinon celles du compte et celles sans compte.
+func existingRulesBlock(d *Data, account string) string {
+	var rules []*RuleProposal
+	for _, r := range d.RuleProposals {
+		if account == "" || r.Account == "" || strings.EqualFold(r.Account, account) {
+			rules = append(rules, r)
+		}
+	}
+	if len(rules) == 0 && len(d.Settings.Rules) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n<regles_existantes>\n")
+	for _, r := range d.Settings.Rules {
+		fmt.Fprintf(&b, "- (en place) %s\n", r)
+	}
+	for _, r := range rules {
+		fmt.Fprintf(&b, "- (%s) %s\n", map[string]string{RuleProposed: "proposée", RuleAccepted: "en place", RuleRefused: "refusée", RuleRevoked: "retirée"}[r.Status], r.Text)
+	}
+	b.WriteString("</regles_existantes>\n")
+	return b.String()
 }
 
 // DecideRule accepte (texte éventuellement retouché), refuse ou retire une règle.
