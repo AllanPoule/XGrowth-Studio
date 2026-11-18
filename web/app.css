@@ -222,6 +222,15 @@ tr:last-child td{border-bottom:0}
 }
 @media (min-width:901px){.mnav{display:none}}
 
+/* ---------- commentaires (campagnes de réponses) */
+.camp-sum{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.camp-sum .card+.card{margin-top:0}
+.pains{display:grid;gap:12px;margin-top:8px}
+.pain{border:1px solid var(--line);border-radius:var(--r2);padding:12px;background:var(--panel2)}
+.pain>textarea{margin-top:8px}
+.cand .tw-text{margin:8px 0 4px}
+
+
 /* ---------- affiner l'IA */
 details.tune{border-top:1px solid var(--line);padding-top:14px}
 details.tune>summary{cursor:pointer;font-weight:650;display:flex;align-items:center;gap:8px;list-style:none;color:var(--ink2)}

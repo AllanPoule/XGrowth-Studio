@@ -24,7 +24,7 @@ import (
 )
 
 // Une version par pull request fusionnée (voir CHANGELOG.md).
-const version = "0.06"
+const version = "0.07"
 
 var pretty bool
 
@@ -382,6 +382,18 @@ func main() {
 	case "rules":
 		cmdRules(ctx, st, a)
 
+	case "campaign", "campaigns":
+		cmdCampaign(ctx, st, a)
+
+	case "comments":
+		var out []*Post
+		for _, p := range store.Snapshot().Posts {
+			if p.CampaignID != "" && (a.str("campaign") == "" || p.CampaignID == a.str("campaign")) && (a.str("status") == "" || p.Status == a.str("status")) {
+				out = append(out, p)
+			}
+		}
+		emit(out)
+
 	case "log":
 		d := store.Snapshot()
 		n := a.integer("count", 50)
@@ -709,6 +721,40 @@ func applyPromptFlags(p *AIPrompts, a args) {
 	}
 }
 
+func cmdCampaign(ctx context.Context, st *Studio, a args) {
+	switch a.arg(0) {
+	case "", "list":
+		d := st.store.Snapshot()
+		emit(map[string]any{"campaigns": d.Campaigns, "stats": campaignStats(d, time.Now())})
+	case "save":
+		f := need(a, 1, "campaign save <fichier.json> (une campagne ; sans id : création)")
+		b, err := os.ReadFile(f)
+		check(err)
+		var c Campaign
+		if err := json.Unmarshal(b, &c); err != nil {
+			fail("invalid_input", fmt.Errorf("campagne : JSON invalide : %w", err))
+		}
+		out, err := st.SaveCampaign(&c)
+		check(err)
+		emit(out)
+	case "run":
+		emit(st.RunCampaign(ctx, need(a, 1, "campaign run <id>"), true))
+	case "remove":
+		check(st.RemoveCampaign(need(a, 1, "campaign remove <id>")))
+		emit(map[string]string{"removed": a.arg(1)})
+	case "candidates":
+		var out []*Candidate
+		for _, c := range st.store.Snapshot().Candidates {
+			if (a.arg(1) == "" || c.CampaignID == a.arg(1)) && (a.str("status") == "" || c.Status == a.str("status")) {
+				out = append(out, c)
+			}
+		}
+		emit(out)
+	default:
+		fail("invalid_input", fmt.Errorf("usage : xgrowth campaign list|save|run|remove|candidates"))
+	}
+}
+
 func cmdRules(ctx context.Context, st *Studio, a args) {
 	switch a.arg(0) {
 	case "", "list":
@@ -867,6 +913,9 @@ func cmdSettings(store *Store, a args) {
 			s.PostTypes = postTypesFlag(a.str("post-types"))
 		}
 		applyPromptFlags(&s.Prompts, a)
+		if a.has("comments-prompt") {
+			s.CommentsPrompt = strings.TrimSpace(a.str("comments-prompt"))
+		}
 		if a.has("rules-auto-accept") {
 			s.RulesAutoAccept = a.boolean("rules-auto-accept")
 		}
@@ -902,7 +951,7 @@ COMPTES
            [--competitors a,b] [--banned x,y] [--min-gap 60] [--triage-min 6] [--max-items 40]
            [--rules "une règle par ligne" | --rules-file regles.txt] [--post-types JSON|@types.json|defaut]
            [--ideas-prompt …] [--item-prompt …] [--reply-prompt …] [--quote-prompt …] [--rewrite-prompt …]
-           [--visual-guide …] [--rules-auto-accept[=false]] [--auto-synthesis[=false]]
+           [--visual-guide …] [--rules-auto-accept[=false]] [--auto-synthesis[=false]] [--comments-prompt "..."]
   providers                              IA détectées sur cette machine (Claude Code, Codex, Gemini, API)
   ai-test [--provider p] [--model m]     vérifie qu'une IA répond
 
@@ -931,6 +980,13 @@ RÉDACTION
   rules [list]                           règles communes et règles apprises
   rules synthesize [--account c]         l'IA tire des règles des retours (rejets, réécritures, leçons)
   rules accept <id> [--text "..."] | refuse <id> | revoke <id>
+
+CAMPAGNES DE RÉPONSES (prospection ; rien ne part sans validation)
+  campaign list                          campagnes et réponses envoyées aujourd'hui
+  campaign save <campagne.json>          crée (sans id) ou met à jour une campagne et ses douleurs
+  campaign run <id>                      recherche, qualification et réponses maintenant
+  campaign candidates [<id>] [--status new|drafted|dismissed] | campaign remove <id>
+  comments [--campaign id] [--status draft|scheduled|published|rejected]
 
 VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   validate <id> --by <nom> [--at "2026-11-20 09:00" | --at +2h | --now]

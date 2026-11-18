@@ -32,6 +32,7 @@ type Tweet struct {
 	Author    struct {
 		ScreenName string `json:"screenName"`
 		Name       string `json:"name"`
+		Followers  int    `json:"followersCount,omitempty"` // 0 = inconnu
 	} `json:"author"`
 	Metrics struct {
 		Likes     int `json:"likes"`
@@ -280,23 +281,30 @@ type xapiList struct {
 	Data     []xapiTweet `json:"data"`
 	Includes struct {
 		Users []struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-			Name     string `json:"name"`
+			ID            string `json:"id"`
+			Username      string `json:"username"`
+			Name          string `json:"name"`
+			PublicMetrics struct {
+				Followers int `json:"followers_count"`
+			} `json:"public_metrics"`
 		} `json:"users"`
 	} `json:"includes"`
 }
 
-const xapiFields = "tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name"
+const xapiFields = "tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name,public_metrics"
 
 func (l xapiList) tweets() []Tweet {
 	users := map[string][2]string{}
+	followers := map[string]int{}
 	for _, u := range l.Includes.Users {
 		users[u.ID] = [2]string{u.Username, u.Name}
+		followers[u.ID] = u.PublicMetrics.Followers
 	}
 	out := make([]Tweet, 0, len(l.Data))
 	for _, x := range l.Data {
-		out = append(out, x.toTweet(users[x.AuthorID]))
+		t := x.toTweet(users[x.AuthorID])
+		t.Author.Followers = followers[x.AuthorID]
+		out = append(out, t)
 	}
 	return out
 }

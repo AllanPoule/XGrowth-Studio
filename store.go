@@ -117,6 +117,7 @@ type Post struct {
 	ValidatedAt *time.Time `json:"validatedAt,omitempty"`
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	TweetID     string     `json:"tweetId,omitempty"`
+	CampaignID  string     `json:"campaignId,omitempty"` // réponse rédigée pour une campagne
 	Error       string     `json:"error,omitempty"`
 	SourceItem  string     `json:"sourceItem,omitempty"`
 	PostType    string     `json:"postType,omitempty"`    // type de post choisi par l'IA
@@ -190,6 +191,9 @@ type Settings struct {
 	RulesAutoAccept bool       `json:"rulesAutoAccept"`     // applique d'office les règles proposées
 	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
 	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
+
+	// Campagnes de réponses : consigne des commentaires (vide = défaut).
+	CommentsPrompt string `json:"commentsPrompt,omitempty"`
 }
 
 // Auth protège le studio web : mot de passe (PBKDF2) et sessions (hachées).
@@ -213,12 +217,15 @@ type LogEntry struct {
 }
 
 type Data struct {
-	Version   int        `json:"version"`
-	Settings  Settings   `json:"settings"`
-	Accounts  []*Account `json:"accounts"`
-	Posts     []*Post    `json:"posts"`
-	Items     []*Item    `json:"items"`
-	Learnings []Learning `json:"learnings"`
+	Version  int        `json:"version"`
+	Settings Settings   `json:"settings"`
+	Accounts []*Account `json:"accounts"`
+	Posts    []*Post    `json:"posts"`
+	Items    []*Item    `json:"items"`
+	// campagnes de réponses et posts qu'elles ont trouvés
+	Campaigns  []*Campaign  `json:"campaigns,omitempty"`
+	Candidates []*Candidate `json:"candidates,omitempty"`
+	Learnings  []Learning   `json:"learnings"`
 	// règles tirées des retours par la synthèse
 	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
 	// banque d'idées de posts originaux

@@ -58,6 +58,24 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 			rules = append(rules, map[string]any{"text": "Règle commune", "rationale": "deux retours", "evidence": []string{rules[0]["evidence"].([]string)[0], rules[len(rules)-1]["evidence"].([]string)[0], "inconnu"}})
 		}
 		resp = map[string]any{"rules": rules}
+	case props["results"] != nil && strings.Contains(user, "<campagne"):
+		// qualifie les candidats qui « galèrent », avec la première douleur active
+		pain := ""
+		if i := strings.Index(user, `<douleur id="`); i >= 0 {
+			pain = user[i+13:]
+			pain = pain[:strings.Index(pain, `"`)]
+		}
+		var res []map[string]any
+		for _, part := range strings.Split(user, "<contenu_x id=\"")[1:] {
+			id := part[:strings.Index(part, "\"")]
+			ok := strings.Contains(part, "galère")
+			reply, score := "", 1.0
+			if ok {
+				reply, score = "Essaie de couper le problème en deux.", 4
+			}
+			res = append(res, map[string]any{"id": id, "qualify": ok, "score": score, "pain_id": pain, "reason": "test", "reply": reply})
+		}
+		resp = map[string]any{"results": res}
 	case props["results"] != nil:
 		// garde les contenus dont le texte contient "agent"
 		var res []map[string]any

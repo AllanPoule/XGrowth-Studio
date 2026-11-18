@@ -4,6 +4,27 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.07 — 18 novembre 2026
+
+[PR n°7](https://github.com/AllanPoule/XGrowth-Studio/pull/7) · Campagnes de réponses (prospection)
+
+### Ajouté
+- **Onglet Commentaires** : réponses À valider, Envoyées et Écartées, avec « N / 10 envoyée(s) aujourd'hui » par
+  campagne. Rien ne part sans validation.
+- **Campagnes** par compte : réponses par jour, minutes entre deux réponses, jours avant de répondre de nouveau au
+  même auteur, budget de recherches X par jour, fenêtre horaire, plafond d'abonnés de l'auteur, notes.
+- **Douleurs** : les mots du lecteur, les recherches X, des exemples qui correspondent ou non, la solution et où
+  elle a été vérifiée (obligatoires pour une douleur active), une preuve facultative.
+- **Consigne des commentaires**, commune, avec une valeur par défaut prudente (aider d'abord, transparence, ni URL
+  ni concurrent).
+- Le planificateur fait tourner les campagnes actives au plus une fois par heure ; l'IA qualifie les posts trouvés
+  et rédige les réponses.
+- CLI : `campaign list|save|run|remove|candidates`, `comments`, `settings --comments-prompt`.
+
+### Modifié
+- Les réponses de campagne ont leur propre rythme d'envoi et n'occupent ni les créneaux ni la limite quotidienne
+  des posts du compte. Elles ne comptent plus dans « À valider ».
+
 ## V0.06 — 18 novembre 2026
 
 [PR n°6](https://github.com/AllanPoule/XGrowth-Studio/pull/6) · Écriture, sur le modèle de Timon Growth Studio

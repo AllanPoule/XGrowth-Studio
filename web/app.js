@@ -203,13 +203,16 @@ const ROUTES = [
   ["home", "Accueil", I.home], ["queue", "À valider", I.inbox], ["compose", "Créer", I.pen],
   ["calendar", "Calendrier", I.cal], ["watch", "Veille", I.radar], ["published", "Performances", I.chart], ["settings", "Réglages", I.gear],
 ];
+// l'onglet « Commentaires » (campagnes de réponses) se place après « Créer »
+ROUTES.splice(3, 0, ["comments", "Commentaires", I.reply]);
 const route = () => (location.hash.replace(/^#\/?/, "") || "home").split("/")[0];
 window.addEventListener("hashchange", () => S && render());
 
 function counts() {
-  const q = S.posts.filter(p => p.status === "draft" || p.status === "failed").length;
+  const q = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId).length;
   const w = (S.items || []).filter(i => i.status === "pending").length;
-  return { queue: q, watch: w };
+  const cm = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && p.campaignId).length;
+  return { queue: q, watch: w, comments: cm };
 }
 
 function render() {
@@ -234,9 +237,9 @@ function render() {
       <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
       <main class="main"><div class="wrap" id="view"></div></main>
     </div>
-    <nav class="mnav">${ROUTES.filter(x => x[0] !== "published").map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
+    <nav class="mnav">${ROUTES.filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
   </div>`;
-  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings };
+  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments };
   (views[r] || vHome)($("#view"));
 }
 
@@ -360,7 +363,7 @@ function typeOptions(accName) {
 }
 
 function vQueue(v) {
-  const ps = S.posts.filter(p => p.status === "draft" || p.status === "failed").slice().reverse();
+  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId).slice().reverse();
   v.innerHTML = `<div class="head"><div><h1>À valider</h1><p>Relisez, retouchez, validez. Rien ne part sur X sans votre feu vert.</p></div>
     <div class="row"><span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
     ${ps.length ? ps.map(p => tweetCard(p, "edit")).join("") : empty(I.check, "Tout est validé", "Aucun brouillon en attente.", `<a class="btn primary" href="#/compose">${I.spark} Créer des posts</a>`)}`;
@@ -1085,6 +1088,103 @@ const wizard = {
     },
   },
 };
+
+// ------------------------------------------------------------------ commentaires (campagnes de réponses)
+function vComments(v) {
+  const camps = S.campaigns || [], stats = S.campaignStats || {}, f = store.get("cf", "todo");
+  const replies = S.posts.filter(p => p.campaignId).slice().reverse();
+  const lists = {
+    todo: replies.filter(p => p.status === "draft" || p.status === "failed"),
+    sent: replies.filter(p => ["published", "scheduled", "validated", "publishing"].includes(p.status)),
+    out: replies.filter(p => p.status === "rejected"),
+  };
+  const dismissed = (S.candidates || []).filter(c => c.status === "dismissed");
+  const campName = id => camps.find(c => c.id === id)?.name || "campagne supprimée";
+  const body = f === "out"
+    ? (lists.out.length || dismissed.length ? `${lists.out.map(p => tweetCard(p, "view")).join("")}
+        ${dismissed.length ? `<h3 style="margin-top:18px">Écartés par l'IA</h3>${dismissed.slice(0, 60).map(c => `<div class="card cand"><div class="row"><b>@${esc(c.author)}</b>${c.followers ? `<span class="small muted">${nf(c.followers)} abonnés</span>` : ""}<span class="spacer"></span><span class="pill">${esc(campName(c.campaignId))}</span>${c.score ? `<span class="pill">${c.score}/5</span>` : ""}</div>
+          <div class="tw-text small">${esc(c.text)}</div>${c.reason ? `<div class="hint">${esc(c.reason)}</div>` : ""}<a class="small" href="${esc(c.url)}" target="_blank" rel="noopener">Voir sur X</a></div>`).join("")}` : ""}`
+      : empty(I.x, "Rien d'écarté", "Les posts écartés par l'IA et les réponses rejetées apparaîtront ici."))
+    : lists[f].length ? lists[f].map(p => tweetCard(p, f === "todo" ? "edit" : p.status === "published" ? "view" : "planned")).join("")
+      : f === "todo" ? empty(I.reply, "Aucune réponse à valider", camps.length ? "Les campagnes actives cherchent des posts dans leur fenêtre horaire, au plus une fois par heure." : "Créez une campagne ci-dessous pour trouver des posts qui expriment une douleur que vous savez résoudre.")
+        : empty(I.send, "Rien d'envoyé", "Les réponses validées et envoyées apparaîtront ici.");
+  v.innerHTML = `<div class="head"><div><h1>Commentaires</h1><p>Des réponses utiles aux posts qui expriment une douleur que vous savez résoudre. Rien ne part sans votre validation.</p></div>
+    <div class="row"><span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
+    ${camps.length ? `<div class="camp-sum">${camps.map(c => { const st = stats[c.id] || {}; return `<div class="card"><div class="row"><b>${esc(c.name)}</b><span class="pill ${c.active ? "ok" : ""}">${c.active ? "Active" : "En pause"}</span></div>
+      <div class="small muted">@${esc(handleOf(c.account))} · ${st.sentToday || 0} / ${c.repliesPerDay} envoyée(s) aujourd'hui · ${st.toValidate || 0} à valider</div>
+      <div class="small faint">${c.lastRunAt ? `Dernier passage ${rel(c.lastRunAt)} · ${c.searchesDone || 0} / ${c.searchesPerDay} recherche(s) aujourd'hui` : "Pas encore lancée"}${c.lastRunError ? ` · <span style="color:var(--bad)">${esc(c.lastRunError)}</span>` : ""}</div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" data-act="camp-run" data-id="${c.id}">${I.radar} Chercher maintenant</button></div></div>` }).join("")}</div>` : ""}
+    <div class="seg" id="cf" style="margin:18px 0 12px">${[["todo", "À valider", lists.todo.length], ["sent", "Envoyés", lists.sent.length], ["out", "Écartés", lists.out.length + dismissed.length]].map(([k, l, n]) => `<button data-f="${k}" class="${k === f ? "on" : ""}">${l} (${n})</button>`).join("")}</div>
+    ${body}
+    <h2>Campagnes</h2>
+    ${camps.map(c => campaignForm(c)).join("")}
+    <div class="card"><div class="row between"><div><h3>Nouvelle campagne</h3><p class="small muted" style="margin:0">Un compte, des douleurs à repérer, une solution vérifiée pour chacune.</p></div><button class="btn" data-act="camp-new">Créer</button></div><div id="camp-new"></div></div>
+    <h2>Consigne des commentaires</h2>
+    <div class="card"><p class="small muted" style="margin-top:0">Envoyée à l'IA avec chaque lot de posts trouvés : quels posts méritent une réponse et comment l'écrire. Vide : la consigne par défaut, affichée en grisé.</p>
+      <textarea id="cprompt" rows="7" placeholder="${esc(S.commentsDefault || "")}">${esc(S.settings.commentsPrompt || "")}</textarea>
+      <div class="row" style="margin-top:12px"><span class="spacer"></span><button class="btn primary" data-act="cprompt-save">Enregistrer</button></div></div>`;
+  $("#who", v).oninput = e => store.set("who", e.target.value.trim());
+  $$("#cf button", v).forEach(b => b.onclick = () => { store.set("cf", b.dataset.f); render() });
+  vQueueBind();
+}
+
+function painRow(p = {}) {
+  const lines = a => esc((a || []).join("\n"));
+  return `<div class="pain" data-pain="${esc(p.id || "")}">
+    <div class="row"><b class="small">Douleur</b><span class="spacer"></span><label class="toggle small"><input type="checkbox" data-pf="active" ${p.active ? "checked" : ""}><span class="sw"></span>Active</label><button class="btn ghost sm" data-act="pain-del" aria-label="Retirer cette douleur">${I.x}</button></div>
+    <textarea data-pf="text" rows="2" placeholder="La douleur, avec les mots du lecteur : « je ne sais jamais ce que mon agent a modifié »">${esc(p.text || "")}</textarea>
+    <div class="grid2"><div><label class="l">Recherches</label><textarea data-pf="searches" rows="3" placeholder="Une recherche X par ligne : agent IA logs lang:fr -is:retweet">${lines(p.searches)}</textarea></div>
+      <div><label class="l">Solution (obligatoire si active)</label><textarea data-pf="solution" rows="3" placeholder="L'issue concrète que donne la réponse">${esc(p.solution || "")}</textarea></div>
+      <div><label class="l">Correspond (exemples)</label><textarea data-pf="matches" rows="3" placeholder="Un exemple par ligne">${lines(p.matches)}</textarea></div>
+      <div><label class="l">Ne correspond pas (exemples)</label><textarea data-pf="nonMatches" rows="3" placeholder="Un exemple par ligne">${lines(p.nonMatches)}</textarea></div>
+      <div><label class="l">Vérifiée sur (obligatoire si active)</label><input data-pf="verifiedOn" value="${esc(p.verifiedOn || "")}" placeholder="Où la solution a été vérifiée"></div>
+      <div><label class="l">Preuve (facultatif)</label><input data-pf="proof" value="${esc(p.proof || "")}" placeholder="Lien, capture, chiffre"></div></div></div>`;
+}
+
+function campaignForm(c) {
+  c = c || { repliesPerDay: 10, gapMinutes: 15, authorCooldown: 7, searchesPerDay: 12, hours: "08-22", pains: [] };
+  const num = (k, label, hint) => `<div><label class="l">${label}</label><input data-cf="${k}" type="number" min="0" value="${c[k] ?? ""}">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
+  const inner = `<div class="grid"><div><label class="l">Nom</label><input data-cf="name" value="${esc(c.name || "")}" placeholder="Ex. : Agents sans journal"></div>
+      <div><label class="l">Compte</label><select data-cf="account">${S.accounts.map(a => `<option value="${esc(a.name)}" ${a.name === c.account ? "selected" : ""}>@${esc(a.handle || a.name)}</option>`).join("")}</select></div>
+      ${num("repliesPerDay", "Réponses par jour")}${num("gapMinutes", "Minutes entre deux réponses")}${num("authorCooldown", "Jours avant de répondre au même auteur")}
+      ${num("searchesPerDay", "Budget : recherches X par jour", "Chaque recherche peut être facturée par X (API officielle).")}
+      <div><label class="l">Fenêtre horaire</label><input data-cf="hours" value="${esc(c.hours || "")}" placeholder="08-22"></div>
+      ${num("maxFollowers", "Plafond d'abonnés de l'auteur", "Vide ou 0 : pas de plafond.")}</div>
+    <label class="l">Notes</label><textarea data-cf="notes" rows="2" placeholder="Contexte pour l'IA : produit, public, ce qu'il faut éviter">${esc(c.notes || "")}</textarea>
+    <h3 style="margin-top:18px">Douleurs</h3><div class="pains">${(c.pains || []).map(painRow).join("")}</div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="pain-add">Ajouter une douleur</button></div>
+    <div class="row" style="margin-top:16px"><label class="toggle"><input type="checkbox" data-cf="active" ${c.active ? "checked" : ""}><span class="sw"></span>Campagne active</label><span class="spacer"></span>
+      ${c.id ? `<button class="btn ghost danger sm" data-act="camp-del" data-id="${c.id}">Supprimer</button>` : ""}<button class="btn primary" data-act="camp-save" data-id="${c.id || ""}">Enregistrer</button></div>`;
+  return c.id ? `<div class="card camp" data-camp="${c.id}"><details class="tune"><summary>${esc(c.name)} <span class="small muted">· @${esc(handleOf(c.account))} · ${(c.pains || []).filter(p => p.active).length} douleur(s) active(s)</span></summary>${inner}</details></div>`
+    : `<div class="camp" data-camp="">${inner}</div>`;
+}
+
+function readCampaign(box) {
+  const f = k => box.querySelector(`[data-cf="${k}"]`);
+  const lines = el => el.value.split("\n").map(x => x.trim()).filter(Boolean);
+  const c = { name: f("name").value.trim(), account: f("account").value, active: f("active").checked, hours: f("hours").value.trim(), notes: f("notes").value.trim() };
+  for (const k of ["repliesPerDay", "gapMinutes", "authorCooldown", "searchesPerDay", "maxFollowers"]) c[k] = +f(k).value || 0;
+  c.pains = $$(".pain", box).map(r => {
+    const g = k => r.querySelector(`[data-pf="${k}"]`);
+    return { id: r.dataset.pain, text: g("text").value.trim(), active: g("active").checked, searches: lines(g("searches")), matches: lines(g("matches")),
+      nonMatches: lines(g("nonMatches")), solution: g("solution").value.trim(), verifiedOn: g("verifiedOn").value.trim(), proof: g("proof").value.trim() };
+  }).filter(p => p.text || p.solution || p.searches.length);
+  return c;
+}
+
+Object.assign(actions, {
+  async "camp-run"(b) { await run(b, () => api(`/api/campaigns/${b.dataset.id}/run`, {}), r => `${r.searches} recherche(s), ${r.found} trouvé(s), ${r.qualified} réponse(s) à valider${r.error ? " ; " + r.error : ""}`, { wait: "Recherche…" }) },
+  async "camp-new"() { const box = $("#camp-new"); box.innerHTML = box.innerHTML ? "" : campaignForm(null); dirty = true },
+  async "camp-save"(b) {
+    const box = b.closest("[data-camp]"), c = readCampaign(box);
+    if (b.dataset.id) { c.id = b.dataset.id }
+    await run(b, () => api("/api/campaigns", c), "Campagne enregistrée");
+  },
+  async "camp-del"(b) { if (confirm("Supprimer cette campagne ? Ses réponses déjà rédigées restent dans l'onglet.")) await run(b, () => api(`/api/campaigns/${b.dataset.id}/remove`, {}), "Campagne supprimée") },
+  async "pain-add"(b) { b.closest("[data-camp]").querySelector(".pains").insertAdjacentHTML("beforeend", painRow({ active: true })); dirty = true },
+  async "pain-del"(b) { b.closest(".pain").remove(); dirty = true },
+  async "cprompt-save"(b) { await run(b, () => api("/api/settings", { commentsPrompt: $("#cprompt").value.trim() }), "Consigne enregistrée") },
+});
 
 // ------------------------------------------------------------------ rafraîchissement
 setInterval(async () => {
