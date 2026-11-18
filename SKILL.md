@@ -23,6 +23,7 @@ show <id>                         one post with its history
 items [--status pending|kept|ignored|drafted] [--account a]
 calendar [--days 14]              planned and published posts by day
 learnings                         the owner's feedback, applied to every draft
+rules [list]                      common writing rules and learned rules (proposed, accepted, refused, revoked)
 log [-n 50]
 ```
 
@@ -40,7 +41,7 @@ item keep|ignore <id>
 ## Draft
 
 ```
-draft <account> --topic "brief" [-n 3]     Claude drafts n posts
+draft <account> --topic "brief" [-n 3] [--type key]   Claude drafts n posts (of one post type if given)
 draft <account> --item <item id> [-n 2]    drafts from a watched post
 reply <account> <url|id> [--quote]         Claude drafts a reply (or quote)
 write <account> "text" [--reply-to id] [--quote-of id] [--media file]   your own draft
@@ -48,7 +49,23 @@ edit <id> "new text"                       any edit sends the post back to draft
 rewrite <id> --feedback "shorter, one idea" Claude rewrites; the feedback becomes a lesson
 reject <id> --reason "why"                 the reason becomes a lesson
 learn "lesson" [--account a]
+rules synthesize [--account a]             the AI turns unsynthesized feedback into proposed rules
 ```
+
+## Tune the AI (only when the human asks)
+
+The owner's editorial settings guide every draft: goals, length, reference posts, post types, per-request
+instructions and rules. Read them with `account show <account>` and `settings`; change them only on request:
+
+```
+account set <account> [--goals "..."] [--length court|moyen|long] [--examples-file posts.txt]
+                      [--post-types JSON|@file.json|defaut] [--ideas-prompt|--item-prompt|--reply-prompt
+                      |--quote-prompt|--rewrite-prompt|--visual-guide "..."]   (empty = inherit)
+settings [--rules-file rules.txt] [--post-types ...] [--<kind>-prompt "..."] [--visual-guide "..."]
+```
+
+Never accept, refuse or revoke a learned rule yourself (`rules accept|refuse|revoke`): like validation, it is the
+human's decision. Tell them which rules wait in Settings.
 
 Drafts must pass the guard before a human can validate them: no competitor names (`settings`), no banned phrases,
 280 characters max (4000 for Premium accounts), no exact repeat of a published post. Fix a failing draft with

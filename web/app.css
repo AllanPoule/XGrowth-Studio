@@ -221,3 +221,19 @@ tr:last-child td{border-bottom:0}
   .av{width:36px;height:36px;font-size:14px}
 }
 @media (min-width:901px){.mnav{display:none}}
+
+/* ---------- affiner l'IA */
+details.tune{border-top:1px solid var(--line);padding-top:14px}
+details.tune>summary{cursor:pointer;font-weight:650;display:flex;align-items:center;gap:8px;list-style:none;color:var(--ink2)}
+details.tune>summary::-webkit-details-marker{display:none}
+details.tune>summary svg{width:16px;height:16px;color:var(--a1)}
+details.tune>summary:after{content:"";margin-left:auto;width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .15s}
+details.tune[open]>summary:after{transform:rotate(-135deg)}
+details.tune[open]>summary{margin-bottom:6px}
+.ptypes{display:grid;gap:10px;margin-top:8px}
+.ptype{border:1px solid var(--line);border-radius:var(--r2);padding:10px;background:var(--panel2)}
+.ptype-head{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 88px auto;gap:8px;align-items:center;margin-bottom:8px}
+.ptype textarea{min-height:56px}
+.ptype .share{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:12.5px}
+.ptype .share input{padding:10px 8px;text-align:right}
+@media (max-width:640px){.ptype-head{grid-template-columns:1fr 88px auto}.ptype-head [data-f=goal]{grid-column:1/-1;order:3}}
