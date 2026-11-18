@@ -335,3 +335,7 @@ td {padding:13px}
 .ic-row .btn svg {width:14px;height:14px}
 @media (max-width:1180px) {.items-grid {grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px) {.items-grid {grid-template-columns:minmax(0,1fr)}}
+/* Badge « New » : contenu récupéré depuis la dernière visite de la veille */
+.pill.new {background:var(--grad);color:#0b1015;border-color:transparent;font-weight:750;letter-spacing:.02em}
+.ic-head .pill.new {margin-left:auto;flex:none}
+h1 .pill.new {font-size:12px;vertical-align:middle;margin-left:6px;letter-spacing:0}

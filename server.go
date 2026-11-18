@@ -221,6 +221,13 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	post("/api/items", func(r *http.Request, b map[string]any) (any, error) {
 		return st.AddItem(r.Context(), s(b, "account"), s(b, "ref"))
 	})
+	post("/api/watch/seen", func(r *http.Request, b map[string]any) (any, error) {
+		now := time.Now().UTC()
+		return map[string]any{"watchSeenAt": now}, st.store.Update(func(d *Data) error {
+			d.Settings.WatchSeenAt = &now
+			return nil
+		})
+	})
 	post("/api/fetch", func(r *http.Request, b map[string]any) (any, error) {
 		return st.PollWatch(r.Context(), s(b, "account"), true), nil
 	})

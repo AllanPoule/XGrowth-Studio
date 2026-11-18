@@ -211,6 +211,7 @@ function render() {
   if (!S) return;
   dirty = false;
   const r = route(), c = counts();
+  if (r !== "watch") watchBaseline = undefined;
   const prov = S.ai?.provider, pinfo = (P || []).find(p => p.id === prov);
   const navItem = ([k, l, ic], cls = "") => `<a href="#/${k}" class="${k === r ? "on" : ""} ${cls}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`;
   $("#root").innerHTML = `<div class="app">
@@ -397,13 +398,24 @@ function vCalendar(v) {
     <h2>File de publication</h2>${planned.length ? planned.map(p => tweetCard(p, "planned")).join("") : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
 }
 
+// « New » : contenus récupérés depuis la visite précédente de la veille. La
+// référence est figée à l'entrée sur la page (les badges restent pendant la
+// visite, même après un rafraîchissement), puis la visite est enregistrée.
+let watchBaseline;
+const isNew = i => watchBaseline === null || (watchBaseline && new Date(i.fetchedAt) > new Date(watchBaseline));
+
 function vWatch(v) {
+  if (watchBaseline === undefined) {
+    watchBaseline = S.settings.watchSeenAt || null;
+    api("/api/watch/seen", {}).then(r => { if (S) S.settings.watchSeenAt = r.watchSeenAt }).catch(() => {});
+  }
   const f = store.get("wf", "pending");
+  const fresh = (S.items || []).filter(i => i.status === "pending" && isNew(i)).length;
   const filtered = (S.items || []).filter(i => f === "all" || i.status === f);
   const items = f === "pending" ? sortItems(filtered) : filtered.slice().reverse();
   const targets = S.accounts.flatMap(a => (a.watch || []).map(w => ({ ...w, account: a.name })));
   const lab = { pending: "À trier", kept: "Gardés", drafted: "Rédigés", ignored: "Ignorés", all: "Tout" };
-  v.innerHTML = `<div class="head"><div><h1>Veille</h1><p>Les comptes et recherches que vous suivez. L'IA trie, vous choisissez quoi en faire.</p></div>
+  v.innerHTML = `<div class="head"><div><h1>Veille${fresh ? ` <span class="pill new" title="Récupérés depuis votre dernière visite">${fresh} nouveau${fresh > 1 ? "x" : ""}</span>` : ""}</h1><p>Les comptes et recherches que vous suivez. L'IA trie, vous choisissez quoi en faire.</p></div>
     <div class="row"><button class="btn sm" data-act="fetch">${I.refresh} Actualiser</button><button class="btn sm" data-act="bookmarks">Importer mes signets</button><button class="btn primary sm" data-act="triage">${I.spark} Trier avec l'IA</button></div></div>
     <div class="card"><div class="row">${accountSelect("wacc")}
       <div class="seg" id="wk"><button data-k="user" class="on">Compte</button><button data-k="search">Recherche</button></div>
@@ -430,7 +442,7 @@ function itemCard(i) {
     : i.suggestion === "skip" ? `<span class="pill" title="Suggestion de l'IA : rien n'est ignoré sans vous">Peu pertinent · ${i.score}/10</span>` : "";
   const st = { kept: '<span class="pill accent">Gardé</span>', drafted: '<span class="pill ok">Rédigé</span>', ignored: '<span class="pill bad">Ignoré</span>' }[i.status] || "";
   return `<article class="card icard ${i.suggestion === "skip" && i.status === "pending" ? "dim" : ""}">
-    <div class="ic-head"><div class="av sm">${esc((i.author || "?")[0])}</div><div class="ic-who"><b>@${esc(i.author)}</b><span class="small muted">${rel(i.fetchedAt)} · ${esc(src)}</span></div></div>
+    <div class="ic-head"><div class="av sm">${esc((i.author || "?")[0])}</div><div class="ic-who"><b>@${esc(i.author)}</b><span class="small muted">${rel(i.fetchedAt)} · ${esc(src)}</span></div>${isNew(i) ? `<span class="pill new" title="Récupéré depuis votre dernière visite">New</span>` : ""}</div>
     ${sugg || st ? `<div class="ic-pills">${sugg}${st}</div>` : ""}
     <div class="ic-text">${esc(i.text)}</div>
     <div class="small muted">♥ ${nf(i.likes)} · 👁 ${nf(i.views)} · <a href="${esc(i.url)}" target="_blank" rel="noopener">Ouvrir sur X</a></div>

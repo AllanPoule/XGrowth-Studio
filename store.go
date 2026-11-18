@@ -163,6 +163,9 @@ type Settings struct {
 	TriageMinScore float64  `json:"triageMinScore"`
 	MaxItemsPerRun int      `json:"maxItemsPerRun"`
 	Onboarded      bool     `json:"onboarded"`
+	// Dernière visite de la veille : les contenus récupérés après sont « New ».
+	// Stockée côté serveur pour rester juste d'un navigateur à l'autre.
+	WatchSeenAt *time.Time `json:"watchSeenAt,omitempty"`
 
 	// Affiner l'IA, pour tous les comptes.
 	Rules           []string   `json:"rules,omitempty"`     // règles d'écriture communes
