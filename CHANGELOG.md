@@ -4,6 +4,19 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.08 — 18 novembre 2026
+
+[PR n°8](https://github.com/AllanPoule/XGrowth-Studio/pull/8) · Sources
+
+### Ajouté
+- **Changelog du produit** (URL ou chemin absolu) : ses nouvelles lignes arrivent dans la veille.
+- **Dépôts GitHub étoilés** : chaque nouveau dépôt étoilé devient un contenu de veille.
+- **Actualités des sources primaires** : un nouveau post d'un compte suivi marqué comme source primaire est rédigé
+  en brouillon d'actualité une fois son fil calmé (4 min), s'il a moins de 12 h, dans la limite de 8 par jour.
+- Consigne des brouillons de news (commune et par compte) et méthode de récupération, transmise au tri.
+- Réglages › Sources et actualités, et le volet « Sources de ce compte » dans chaque fiche.
+- CLI : `sources`, `sources news`, `sources status`, `watch primary`, options `--changelog --github-user --news`.
+
 ## V0.07 — 18 novembre 2026
 
 [PR n°7](https://github.com/AllanPoule/XGrowth-Studio/pull/7) · Campagnes de réponses (prospection)

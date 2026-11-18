@@ -168,6 +168,29 @@ fenêtre de sa campagne, sans occuper les créneaux des posts du compte. **Rien 
 Avant chaque envoi, XGrowth vérifie que la session connectée correspond bien au handle du compte. Un post ne part
 jamais depuis le mauvais compte.
 
+## Sources
+
+Dans la fiche de chaque compte, **Sources de ce compte** ajoute des sources à la veille. Les réglages communs des
+actualités sont dans **Réglages › Sources et actualités**.
+
+| Source | Effet |
+| --- | --- |
+| Changelog du produit | URL http(s) ou chemin absolu sur le serveur. Les nouvelles lignes arrivent dans la veille (*build in public*) ; le premier relevé sert de référence |
+| Dépôts GitHub étoilés | identifiant GitHub. Chaque nouveau dépôt étoilé devient un contenu de veille (API publique de GitHub) |
+| Actualités des sources primaires | cochez des comptes suivis comme sources primaires. Un nouveau post de l'un d'eux est rédigé en brouillon d'actualité quand son fil s'est calmé (4 min sans nouveau post), s'il a moins de 12 h, dans la limite de 8 actualités par jour et par compte. Le fil entier est donné à l'IA |
+| Consigne des brouillons de news | commune et par compte, avec une valeur par défaut prudente (ce qui change concrètement, sans extrapoler) |
+| Méthode de récupération | consignes libres, transmises à l'IA à chaque tri de la veille |
+
+Le planificateur relève le changelog et les étoiles toutes les 60 minutes (réglable) et rédige les actualités
+prêtes. Les brouillons d'actualité attendent la validation, comme le reste.
+
+```bash
+./xgrowth account set moncompte --changelog https://exemple.fr/CHANGELOG.md --github-user moi --news on
+./xgrowth watch primary <id> on            # un compte suivi devient une source primaire
+./xgrowth sources --account moncompte      # relève maintenant
+./xgrowth settings --news-quiet 4 --news-max-age 12 --news-per-day 8
+```
+
 ## Déploiement privé (NetBird, Tailscale…)
 
 Le studio peut publier sur votre compte : exposez-le uniquement sur un réseau privé. Exemple sur un serveur Linux

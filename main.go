@@ -24,7 +24,7 @@ import (
 )
 
 // Une version par pull request fusionnée (voir CHANGELOG.md).
-const version = "0.07"
+const version = "0.08"
 
 var pretty bool
 
@@ -187,6 +187,17 @@ func main() {
 
 	case "watch":
 		cmdWatch(st, a)
+
+	case "sources":
+		if a.arg(0) == "news" {
+			emit(st.DraftNews(ctx))
+			break
+		}
+		if a.arg(0) == "status" {
+			emit(st.sourcesStatus())
+			break
+		}
+		emit(st.PollSources(ctx, a.str("account"), true))
 
 	case "fetch":
 		emit(st.PollWatch(ctx, a.str("account"), true))
@@ -784,6 +795,7 @@ func cmdAccount(st *Studio, a args) {
 			acc.AgentxAccount = acc.Name
 		}
 		applyAccountFlags(acc, a)
+		applySourceFlags(acc, a)
 		check(st.SaveAccount(acc))
 		emit(acc)
 	case "set":
@@ -794,6 +806,7 @@ func cmdAccount(st *Studio, a args) {
 			fail("not_found", fmt.Errorf("compte %q inconnu", name))
 		}
 		applyAccountFlags(acc, a)
+		applySourceFlags(acc, a)
 		check(st.SaveAccount(acc))
 		emit(acc)
 	case "check":
@@ -831,6 +844,33 @@ func cmdAccount(st *Studio, a args) {
 	}
 }
 
+// applySourceFlags : sources du compte (changelog, étoiles GitHub, actualités, méthode).
+func applySourceFlags(acc *Account, a args) {
+	if a.has("changelog") {
+		acc.Sources.Changelog = a.str("changelog")
+	}
+	if a.has("github-user") {
+		acc.Sources.GitHubUser = a.str("github-user")
+	}
+	if a.has("news") {
+		acc.Sources.News = onOff(a.str("news"))
+	}
+	if a.has("news-prompt") {
+		acc.Sources.NewsPrompt = a.str("news-prompt")
+	}
+	if a.has("method") {
+		acc.Sources.Method = a.str("method")
+	}
+}
+
+func onOff(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "oui", "true", "1", "yes":
+		return true
+	}
+	return false
+}
+
 func cmdWatch(st *Studio, a args) {
 	switch a.arg(0) {
 	case "add":
@@ -842,6 +882,24 @@ func cmdWatch(st *Studio, a args) {
 		w, err := st.AddWatch(acct, kind, value, a.integer("every", 60))
 		check(err)
 		emit(w)
+	case "primary":
+		id := need(a, 1, "watch primary <id> on|off")
+		on := a.arg(2) != "off"
+		check(st.store.Update(func(d *Data) error {
+			for _, acc := range d.Accounts {
+				for i := range acc.Watch {
+					if acc.Watch[i].ID == id {
+						if on && acc.Watch[i].Kind != "user" {
+							return fmt.Errorf("seul un compte suivi peut être une source primaire")
+						}
+						acc.Watch[i].Primary = on
+						return nil
+					}
+				}
+			}
+			return fmt.Errorf("cible de veille %q inconnue", id)
+		}))
+		emit(map[string]any{"id": id, "primary": on})
 	case "remove":
 		check(st.RemoveWatch(need(a, 1, "watch remove <id>")))
 		emit(map[string]string{"removed": a.arg(1)})
@@ -865,6 +923,15 @@ func cmdWatch(st *Studio, a args) {
 func cmdSettings(store *Store, a args) {
 	check(store.Update(func(d *Data) error {
 		s := &d.Settings
+		for flag, dst := range map[string]*int{"news-quiet": &s.NewsQuietMinutes, "news-max-age": &s.NewsMaxAgeHours,
+			"news-per-day": &s.NewsMaxPerDay, "sources-every": &s.SourcesEveryMinutes} {
+			if a.has(flag) {
+				*dst = a.integer(flag, *dst)
+			}
+		}
+		if a.has("news-prompt") {
+			s.NewsPrompt = strings.TrimSpace(a.str("news-prompt"))
+		}
 		if a.has("provider") {
 			switch p := a.str("provider"); p {
 			case "anthropic", "claude-code", "codex", "gemini":
@@ -954,6 +1021,15 @@ COMPTES
            [--visual-guide …] [--rules-auto-accept[=false]] [--auto-synthesis[=false]] [--comments-prompt "..."]
   providers                              IA détectées sur cette machine (Claude Code, Codex, Gemini, API)
   ai-test [--provider p] [--model m]     vérifie qu'une IA répond
+
+SOURCES (changelog du produit, dépôts GitHub étoilés, actualités des sources primaires)
+  account set <nom> [--changelog URL|/chemin] [--github-user login] [--news on|off] [--news-prompt "..."]
+                    [--method "méthode de récupération (consignes libres)"]
+  watch primary <id> on|off              un compte suivi devient une source primaire (ses posts sont des actualités)
+  sources [--account c]                  relève changelog et étoiles maintenant (les nouveautés vont dans la veille)
+  sources news                           rédige les actualités dont le fil s'est calmé
+  sources status
+  settings [--news-quiet 4] [--news-max-age 12] [--news-per-day 8] [--sources-every 60] [--news-prompt "..."]
 
 VEILLE
   watch add <compte> --user handle | --search "requête" [--every 60]

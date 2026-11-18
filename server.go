@@ -110,6 +110,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
+	mux.HandleFunc("GET /api/sources", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, st.sourcesStatus(), nil)
+	})
 	mux.HandleFunc("GET /api/providers", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, DetectProviders(r.URL.Query().Get("refresh") == "1"), nil)
 	})
@@ -277,6 +280,29 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/watch", func(r *http.Request, b map[string]any) (any, error) {
 		return st.AddWatch(s(b, "account"), s(b, "kind"), s(b, "value"), n(b, "every", 60))
+	})
+	post("/api/accounts/{name}/sources", func(r *http.Request, b map[string]any) (any, error) {
+		raw, _ := json.Marshal(b["sources"])
+		var src SourceSettings
+		if err := json.Unmarshal(raw, &src); err != nil {
+			return nil, err
+		}
+		var primary []string
+		if list, ok := b["primary"].([]any); ok {
+			primary = []string{}
+			for _, x := range list {
+				if v, ok := x.(string); ok {
+					primary = append(primary, v)
+				}
+			}
+		}
+		return st.SaveSources(r.PathValue("name"), src, primary)
+	})
+	post("/api/sources/poll", func(r *http.Request, b map[string]any) (any, error) {
+		return st.PollSources(r.Context(), s(b, "account"), true), nil
+	})
+	post("/api/news/draft", func(r *http.Request, b map[string]any) (any, error) {
+		return st.DraftNews(r.Context()), nil
 	})
 	post("/api/watch/{id}/remove", func(r *http.Request, b map[string]any) (any, error) {
 		return nil, st.RemoveWatch(r.PathValue("id"))

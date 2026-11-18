@@ -27,6 +27,15 @@ rules [list]                      common writing rules and learned rules (propos
 log [-n 50]
 ```
 
+## Sources
+
+```
+sources [--account a]                      fetch the product changelog and GitHub stars now (new entries go to the watch list)
+sources news                               draft the news of primary sources whose thread has settled
+sources status
+watch primary <id> on|off                  mark a followed account as a primary source (only when the human asks)
+```
+
 ## Watch and triage
 
 ```

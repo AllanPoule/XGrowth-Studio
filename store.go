@@ -46,6 +46,8 @@ type WatchTarget struct {
 	IntervalMin int       `json:"intervalMin"`
 	LastPolled  time.Time `json:"lastPolled,omitzero"`
 	LastSeenID  string    `json:"lastSeenId,omitempty"`
+
+	Primary bool `json:"primary,omitempty"` // source primaire : ses posts sont des actualités
 }
 
 type Account struct {
@@ -67,6 +69,9 @@ type Account struct {
 	AutoDraft     bool          `json:"autoDraft"` // rédige un brouillon pour chaque contenu gardé
 	DailyLimit    int           `json:"dailyLimit"`
 	Watch         []WatchTarget `json:"watch"`
+
+	// Sources : changelog, étoiles GitHub, actualités, méthode (facultatif).
+	Sources SourceSettings `json:"sources,omitzero"`
 
 	// Affiner l'IA (tous facultatifs : un data.json plus ancien reste valide).
 	Goals     string     `json:"goals,omitempty"`     // objectifs du compte
@@ -171,9 +176,17 @@ type Learning struct {
 }
 
 type Settings struct {
-	AIProvider     string   `json:"aiProvider"` // anthropic | claude-code | codex | gemini (vide = détection)
-	Model          string   `json:"model"`      // vide = modèle par défaut du fournisseur
-	Effort         string   `json:"effort"`
+	AIProvider string `json:"aiProvider"` // anthropic | claude-code | codex | gemini (vide = détection)
+	Model      string `json:"model"`      // vide = modèle par défaut du fournisseur
+	Effort     string `json:"effort"`
+
+	// Sources : actualités des sources primaires et relevés (vide ou 0 = défaut).
+	NewsPrompt          string `json:"newsPrompt,omitempty"`          // consigne des brouillons de news
+	NewsQuietMinutes    int    `json:"newsQuietMinutes,omitempty"`    // attente que le fil se calme (4)
+	NewsMaxAgeHours     int    `json:"newsMaxAgeHours,omitempty"`     // âge maximum d'une actualité (12)
+	NewsMaxPerDay       int    `json:"newsMaxPerDay,omitempty"`       // actualités rédigées par jour et par compte (8)
+	SourcesEveryMinutes int    `json:"sourcesEveryMinutes,omitempty"` // relevé du changelog et des étoiles (60)
+
 	Competitors    []string `json:"competitors"`   // noms jamais publiés
 	BannedPhrases  []string `json:"bannedPhrases"` // expressions interdites
 	MinGapMinutes  int      `json:"minGapMinutes"` // écart minimal entre deux posts d'un compte
