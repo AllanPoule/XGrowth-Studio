@@ -29,6 +29,7 @@ dernière version.
 ### Corrigé
 - Les contenus de veille partaient seuls dans « Ignorés » dès qu'on ouvrait le studio. Au premier démarrage, la
   migration des données (version 2) remet dans « À trier » ceux que l'IA y avait placés.
+- Un binaire macOS de 20 Mo (`XGrowth-Studio`), commité par erreur en V0.04, est retiré du dépôt et ignoré.
 
 ## V0.04 — 18 novembre 2026
 
