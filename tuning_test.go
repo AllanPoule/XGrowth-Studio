@@ -221,7 +221,7 @@ func TestLegacyDataJSONStillLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "data.json"))
-	for _, absent := range []string{`"prompts"`, `"postTypes"`, `"ruleProposals"`, `"goals"`, `"synthesizedAt"`} {
+	for _, absent := range []string{`"prompts"`, `"postTypes"`, `"ruleProposals"`, `"goals"`, `"synthesizedAt"`, `"timing"`, `"ideas"`, `"role"`, `"aiText"`, `"source"`} {
 		if strings.Contains(string(b), absent) {
 			t.Errorf("champ vide %s écrit dans data.json", absent)
 		}

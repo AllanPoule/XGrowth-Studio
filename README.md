@@ -96,6 +96,13 @@ compte, puis commun, puis une valeur par défaut neutre, affichée en grisé.
 | Idée de visuel | commun et compte | renseignée, l'IA propose un visuel avec chaque brouillon (le studio ne génère pas d'image) |
 | Types de posts | commun et compte | libellé, effet recherché, part visée et consigne ; l'IA classe chaque brouillon et privilégie le type le plus en retard sur 30 jours (ou celui que vous imposez) |
 | Règles apprises | commun ou compte | la synthèse relit vos rejets, réécritures et leçons et propose des règles ; vous les acceptez (texte modifiable), refusez ou retirez. Option : les appliquer d'office, synthèse hebdomadaire automatique (désactivées par défaut) |
+| Vos retours | compte | chaque correction faite à la main sur un texte de l'IA devient un retour « Correction » (avant → après), à côté des réécritures, rejets et leçons. Chaque retour a une catégorie (fond, ton, longueur, erreur factuelle, timing, visuel, autre) et une case « Ne pas apprendre ». L'IA relit les retours récents avant d'écrire, et la synthèse s'en nourrit |
+| Repères à compléter | — | l'IA n'invente aucun vécu ni chiffre : elle écrit « [À COMPLÉTER : situation réelle vécue côté créateur] ». Un brouillon qui en contient encore ne peut pas être validé |
+| Profil | compte | rôle (personnel : « je », marque : « nous », automatisé : neutre), compte ouvertement automatisé, nom affiché, une langue par compte |
+| IA du compte | compte | fournisseur et modèle propres au compte (vide : ceux des réglages) |
+| Banque d'idées | compte | l'IA propose des idées (titre, angle, pourquoi) que vous retenez ou écartez, puis rédige le post d'une idée retenue. Réglages : activation, sujets, idées par demande (5), rédaction directe (non), consignes de suggestion et de rédaction |
+| Programmation | compte | créneaux fixes, ou plage horaire (08:00–22:00) avec un écart tiré au hasard entre deux posts (30 à 60 min), un aléa sur le premier post du jour (± 15 min) et un maximum par jour |
+| Voix | compte | texte libre et long, avec un modèle structuré à insérer (ton, phrases types, ce qu'on ne dit jamais, exemples) |
 
 ```bash
 ./xgrowth account set moncompte --goals "50 clients d'ici mars" --length moyen --post-types defaut
@@ -103,6 +110,10 @@ compte, puis commun, puis une valeur par défaut neutre, affichée en grisé.
 ./xgrowth settings --rules-file regles.txt --reply-prompt "Une phrase, un fait vérifiable."
 ./xgrowth draft moncompte --type coulisses
 ./xgrowth rules synthesize --pretty && ./xgrowth rules accept <id>
+./xgrowth account set moncompte --role marque --ai-provider codex --schedule window --window 08:00-22:00 --gap 30-60
+./xgrowth account set moncompte --ideas-enabled --idea-themes $'audit\nproduit' && ./xgrowth ideas suggest moncompte
+./xgrowth ideas draft <id>                         # le post d'une idée retenue, à valider
+./xgrowth learnings set <id> --category ton --ignore
 ```
 
 ## Connexion à X

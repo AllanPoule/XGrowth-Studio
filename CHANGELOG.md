@@ -4,6 +4,31 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.06 — 18 novembre 2026
+
+[PR n°6](https://github.com/AllanPoule/XGrowth-Studio/pull/6) · Écriture, sur le modèle de Timon Growth Studio
+
+### Ajouté
+- **Vos derniers retours** : chaque correction faite à la main sur un texte de l'IA devient un retour « Correction »
+  (texte de l'IA, puis le vôtre), à côté des réécritures, rejets et leçons. Chaque retour a une catégorie (fond, ton,
+  longueur, erreur factuelle, timing, visuel, autre) et une case « Ne pas apprendre ». L'IA les relit avant
+  d'écrire, et la synthèse des retours s'en nourrit.
+- **Repères à compléter** : l'IA n'invente plus de vécu ni de chiffre et écrit « [À COMPLÉTER : …] » à la place.
+  Un brouillon qui en contient encore ne peut pas être validé, et sa carte le signale.
+- **Profil du compte** : rôle (personnel, marque, automatisé), compte ouvertement automatisé, nom affiché, une
+  langue par compte. Le rôle change la façon d'écrire (« je », « nous » ou un style neutre).
+- **IA par compte** : fournisseur et modèle propres à un compte, sinon ceux des réglages.
+- **Banque d'idées** (dans « Créer ») : l'IA propose des idées (titre, angle, pourquoi), vous les retenez ou les
+  écartez, puis elle rédige le post d'une idée retenue. Réglages : activation, sujets, idées par demande, rédaction
+  directe, consignes de suggestion et de rédaction.
+- **Programmation sur plage horaire**, en option des créneaux fixes : début et fin (08:00–22:00), écart tiré au
+  hasard entre deux posts (30 à 60 min), aléa du premier post du jour (± 15 min), maximum par jour.
+- **Modèle de voix structuré** à insérer (qui parle, ton, phrases types, ce qu'on ne dit jamais, exemples).
+- Options CLI : `account set --role --ai-provider --ideas-enabled --schedule window …`, `ideas`, `learnings set`.
+
+### Modifié
+- Rejets et réécritures gardent leur origine et le post concerné.
+
 ## V0.05 — 18 novembre 2026
 
 [PR n°5](https://github.com/AllanPoule/XGrowth-Studio/pull/5)

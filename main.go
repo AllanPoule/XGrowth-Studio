@@ -24,7 +24,7 @@ import (
 )
 
 // Une version par pull request fusionnée (voir CHANGELOG.md).
-const version = "0.05"
+const version = "0.06"
 
 var pretty bool
 
@@ -64,7 +64,8 @@ func writeEnvelope(e envelope) {
 var boolFlags = map[string]bool{
 	"pretty": true, "now": true, "quote": true, "draft": true, "premium": true, "auto-triage": true,
 	"auto-draft": true, "no-scheduler": true, "help": true, "no-auth": true,
-	"rules-auto-accept": true, "auto-synthesis": true,
+	"rules-auto-accept": true, "auto-synthesis": true, "automated": true, "ideas-enabled": true,
+	"ideas-auto-draft": true, "ignore": true,
 }
 
 type args struct {
@@ -349,12 +350,31 @@ func main() {
 		if text == "" {
 			fail("invalid_input", fmt.Errorf("usage : xgrowth learn <leçon> [--account compte]"))
 		}
-		l := Learning{ID: newID("l"), Account: a.str("account"), Text: text, CreatedAt: time.Now().UTC()}
+		l := Learning{ID: newID("l"), Account: a.str("account"), Text: text, Source: FeedbackManual, CreatedAt: time.Now().UTC()}
 		check(store.Update(func(d *Data) error { d.Learnings = append(d.Learnings, l); return nil }))
 		emit(l)
 
 	case "learnings":
+		if a.arg(0) == "set" {
+			var cat *string
+			var ign *bool
+			if a.has("category") {
+				c := a.str("category")
+				cat = &c
+			}
+			if a.has("ignore") {
+				v := a.boolean("ignore")
+				ign = &v
+			}
+			l, err := st.UpdateLearning(need(a, 1, "learnings set <id> [--category fond|ton|longueur|fait|timing|visuel|autre] [--ignore[=false]]"), cat, ign)
+			check(err)
+			emit(l)
+			break
+		}
 		emit(store.Snapshot().Learnings)
+
+	case "ideas":
+		cmdIdeas(ctx, st, a)
 
 	case "settings":
 		cmdSettings(store, a)
@@ -584,6 +604,80 @@ func applyAccountFlags(acc *Account, a args) {
 		acc.PostTypes = postTypesFlag(a.str("post-types"))
 	}
 	applyPromptFlags(&acc.Prompts, a)
+	applyWritingFlags(acc, a)
+}
+
+// applyWritingFlags : profil, IA du compte, banque d'idées et programmation.
+func applyWritingFlags(acc *Account, a args) {
+	if a.has("role") {
+		acc.Role = a.str("role")
+	}
+	if a.has("automated") {
+		acc.Automated = a.boolean("automated")
+	}
+	if a.has("display-name") {
+		acc.DisplayName = a.str("display-name")
+	}
+	if a.has("ai-provider") {
+		acc.AIProvider = a.str("ai-provider")
+	}
+	if a.has("ai-model") {
+		acc.AIModel = a.str("ai-model")
+	}
+	if a.has("ideas-enabled") {
+		acc.Ideas.Enabled = a.boolean("ideas-enabled")
+	}
+	if a.has("idea-themes") {
+		acc.Ideas.Themes = SplitLines(a.str("idea-themes"))
+	}
+	if a.has("ideas-per-request") {
+		acc.Ideas.PerRequest = a.integer("ideas-per-request", acc.Ideas.PerRequest)
+	}
+	if a.has("ideas-auto-draft") {
+		acc.Ideas.AutoDraft = a.boolean("ideas-auto-draft")
+	}
+	if a.has("schedule") {
+		acc.Timing.Mode = a.str("schedule")
+	}
+	if a.has("window") {
+		acc.Timing.Start, acc.Timing.End, _ = strings.Cut(a.str("window"), "-")
+	}
+	if a.has("gap") {
+		lo, hi, _ := strings.Cut(a.str("gap"), "-")
+		acc.Timing.GapMin, _ = strconv.Atoi(strings.TrimSpace(lo))
+		acc.Timing.GapMax, _ = strconv.Atoi(strings.TrimSpace(hi))
+	}
+	if a.has("jitter") {
+		j := a.integer("jitter", 15)
+		acc.Timing.Jitter = &j
+	}
+}
+
+func cmdIdeas(ctx context.Context, st *Studio, a args) {
+	switch a.arg(0) {
+	case "", "list":
+		var out []*Idea
+		for _, i := range st.store.Snapshot().Ideas {
+			if (a.str("account") == "" || strings.EqualFold(i.Account, a.str("account"))) && (a.str("status") == "" || i.Status == a.str("status")) {
+				out = append(out, i)
+			}
+		}
+		emit(out)
+	case "suggest":
+		ideas, err := st.SuggestIdeas(ctx, need(a, 1, "ideas suggest <compte>"))
+		check(err)
+		emit(ideas)
+	case "keep", "dismiss":
+		i, err := st.DecideIdea(need(a, 1, "ideas "+a.arg(0)+" <id>"), a.arg(0))
+		check(err)
+		emit(i)
+	case "draft":
+		p, err := st.DraftIdea(ctx, need(a, 1, "ideas draft <id>"))
+		check(err)
+		emit(p)
+	default:
+		fail("invalid_input", fmt.Errorf("usage : xgrowth ideas list|suggest|keep|dismiss|draft"))
+	}
 }
 
 // postTypesFlag lit --post-types : JSON, @fichier.json, « defaut » ou vide (aucun).
@@ -608,7 +702,7 @@ func postTypesFlag(v string) []PostType {
 // applyPromptFlags : consignes par demande (vide = hérite du niveau supérieur).
 func applyPromptFlags(p *AIPrompts, a args) {
 	for flag, dst := range map[string]*string{"ideas-prompt": &p.Ideas, "item-prompt": &p.Item, "reply-prompt": &p.Reply,
-		"quote-prompt": &p.Quote, "rewrite-prompt": &p.Rewrite, "visual-guide": &p.Visual} {
+		"quote-prompt": &p.Quote, "rewrite-prompt": &p.Rewrite, "visual-guide": &p.Visual, "idea-write-prompt": &p.IdeaWrite} {
 		if a.has(flag) {
 			*dst = a.str(flag)
 		}
@@ -798,6 +892,10 @@ COMPTES
                     [--goals "..."] [--length court|moyen|long] [--examples-file posts.txt]
                     [--post-types JSON|@types.json|defaut] [--ideas-prompt "..."] [--item-prompt "..."]
                     [--reply-prompt "..."] [--quote-prompt "..."] [--rewrite-prompt "..."] [--visual-guide "..."]
+                    [--role personnel|marque|automatise] [--automated] [--display-name "..."]
+                    [--ai-provider claude-code|codex|gemini|anthropic] [--ai-model m]   (vide = réglage global)
+                    [--ideas-enabled] [--idea-themes "un par ligne"] [--ideas-per-request 5] [--ideas-auto-draft]
+                    [--idea-write-prompt "..."] [--schedule slots|window] [--window 08:00-22:00] [--gap 30-60] [--jitter 15]
   account set <nom> --option valeur      account list | show <nom> | remove <nom>
   account check <nom>                    vérifie la connexion à X et que c'est le bon compte
   settings [--provider claude-code|codex|gemini|anthropic] [--model m] [--effort medium]
@@ -826,6 +924,10 @@ RÉDACTION
   show <id> | edit <id> <texte> | media <id> <fichier|none>
   rewrite <id> --feedback "..."          réécriture par Claude (le retour devient une leçon)
   learn <leçon> [--account c] | learnings
+  learnings set <id> [--category fond|ton|longueur|fait|timing|visuel|autre] [--ignore[=false]]
+  ideas [--account c] [--status proposed|kept|dismissed|drafted]
+  ideas suggest <compte>                 l'IA propose des idées de posts originaux (banque d'idées)
+  ideas keep|dismiss <id> | ideas draft <id>   retenir, écarter, rédiger le post d'une idée
   rules [list]                           règles communes et règles apprises
   rules synthesize [--account c]         l'IA tire des règles des retours (rejets, réécritures, leçons)
   rules accept <id> [--text "..."] | refuse <id> | revoke <id>

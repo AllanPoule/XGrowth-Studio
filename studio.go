@@ -30,10 +30,6 @@ func NewStudio(store *Store) *Studio {
 	}
 }
 
-func (s *Studio) aiClient() AI {
-	return s.ai(s.aiSettings())
-}
-
 // aiSettings renvoie les réglages d'IA, fournisseur détecté si non choisi.
 func (s *Studio) aiSettings() Settings {
 	var st Settings
@@ -201,6 +197,9 @@ func Guard(d *Data, a *Account, text string) error {
 	if t == "" {
 		return errors.New("texte vide")
 	}
+	if ph := Placeholders(t); len(ph) > 0 {
+		return fmt.Errorf("le texte contient encore %d repère(s) à compléter (%s) : remplacez-les par du vécu réel", len(ph), ph[0])
+	}
 	if n := utf8.RuneCountInString(t); n > maxLen(a) {
 		return fmt.Errorf("%d caractères, maximum %d pour ce compte", n, maxLen(a))
 	}
@@ -275,14 +274,14 @@ func (s *Studio) GenerateDrafts(ctx context.Context, account, brief, itemID stri
 			return nil, fmt.Errorf("contenu %q inconnu", itemID)
 		}
 	}
-	outs, err := GenerateDrafts(ctx, s.aiClient(), a, d, DraftRequest{Brief: brief, Item: it, N: n, Type: postType, Now: s.now()})
+	outs, err := GenerateDrafts(ctx, s.aiFor(a), a, d, DraftRequest{Brief: brief, Item: it, N: n, Type: postType, Now: s.now()})
 	if err != nil {
 		return nil, err
 	}
 	var posts []*Post
 	for _, o := range outs {
 		p := s.newPost(a.Name, "post", o.Text, o.Rationale)
-		p.PostType, p.VisualBrief = o.Type, strings.TrimSpace(o.Visual)
+		p.PostType, p.VisualBrief, p.AIText = o.Type, strings.TrimSpace(o.Visual), p.Text
 		if it != nil {
 			p.SourceItem = it.ID
 		}
@@ -317,7 +316,7 @@ func (s *Studio) DraftReply(ctx context.Context, account, ref string, quote bool
 	if t.Text == "" {
 		return nil, fmt.Errorf("impossible de lire le post %s", id)
 	}
-	o, err := DraftReply(ctx, s.aiClient(), a, d, t, quote)
+	o, err := DraftReply(ctx, s.aiFor(a), a, d, t, quote)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +325,7 @@ func (s *Studio) DraftReply(ctx context.Context, account, ref string, quote bool
 		kind = "quote"
 	}
 	p := s.newPost(a.Name, kind, o.Text, o.Rationale)
-	p.TargetText = t.Text
+	p.TargetText, p.AIText = t.Text, p.Text
 	if quote {
 		p.QuoteOf = id
 	} else {
@@ -361,6 +360,7 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 		}
 		p.History = append(p.History, Revision{Text: p.Text, At: s.now().UTC()})
 		p.Text = strings.TrimSpace(text)
+		recordCorrection(d, p, s.now().UTC())
 		resetValidation(p)
 		p.UpdatedAt = s.now().UTC()
 		out = p
@@ -401,7 +401,7 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 	if a == nil {
 		return nil, fmt.Errorf("compte %q inconnu", p.Account)
 	}
-	o, err := Rewrite(ctx, s.aiClient(), a, d, p, feedback)
+	o, err := Rewrite(ctx, s.aiFor(a), a, d, p, feedback)
 	if err != nil {
 		return nil, err
 	}
@@ -413,9 +413,10 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 		}
 		p.History = append(p.History, Revision{Text: p.Text, Feedback: feedback, At: s.now().UTC()})
 		p.Text, p.Rationale = strings.TrimSpace(o.Text), o.Rationale
+		p.AIText = p.Text
 		resetValidation(p)
 		p.UpdatedAt = s.now().UTC()
-		d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: feedback, CreatedAt: s.now().UTC()})
+		d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: feedback, Source: FeedbackRewrite, PostID: p.ID, CreatedAt: s.now().UTC()})
 		out = p
 		return nil
 	})
@@ -437,7 +438,7 @@ func (s *Studio) Reject(id, reason string) (*Post, error) {
 		p.Error = reason
 		p.UpdatedAt = s.now().UTC()
 		if strings.TrimSpace(reason) != "" {
-			d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: "Brouillon rejeté : " + reason, CreatedAt: s.now().UTC()})
+			d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: "Brouillon rejeté : " + reason, Source: FeedbackReject, PostID: p.ID, CreatedAt: s.now().UTC()})
 		}
 		out = p
 		return nil
@@ -466,6 +467,9 @@ func (s *Studio) Unschedule(id string) (*Post, error) {
 
 // NextSlot renvoie le premier créneau libre du compte après `after`.
 func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, error) {
+	if a.Timing.Mode == "window" {
+		return nextWindowSlot(d, a, after, skipID)
+	}
 	if len(a.Slots) == 0 {
 		return time.Time{}, fmt.Errorf("le compte %s n'a pas de créneaux : ajoutez-en (--slots 09:00,13:00) ou validez avec --now / --at", a.Name)
 	}
@@ -853,7 +857,7 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 		r := TriageResult{Account: a.Name}
 		for start := 0; start < len(pending); start += 20 {
 			batch := pending[start:min(start+20, len(pending))]
-			outs, err := Triage(ctx, s.aiClient(), a, d, batch)
+			outs, err := Triage(ctx, s.aiFor(a), a, d, batch)
 			if err != nil {
 				r.Error = err.Error()
 				break

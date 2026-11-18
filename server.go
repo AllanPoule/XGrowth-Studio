@@ -101,9 +101,10 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		// parcourt sans test (un studio sans aucun post plantait à l'affichage).
 		reply(w, map[string]any{
 			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
-			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix,
-			"defaults": map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
-			"log":      orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
+			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "ideas": orEmpty(d.Ideas),
+			"feedbackCategories": FeedbackCategories,
+			"defaults":           map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
+			"log":                orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
@@ -307,7 +308,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		if s(b, "text") == "" {
 			return nil, errors.New("leçon vide")
 		}
-		l := Learning{ID: newID("l"), Account: s(b, "account"), Text: s(b, "text"), CreatedAt: time.Now().UTC()}
+		l := Learning{ID: newID("l"), Account: s(b, "account"), Text: s(b, "text"), Source: FeedbackManual, CreatedAt: time.Now().UTC()}
 		return l, st.store.Update(func(d *Data) error { d.Learnings = append(d.Learnings, l); return nil })
 	})
 	// ---- règles apprises (synthèse des retours)
@@ -316,6 +317,29 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/rules/{id}/{decision}", func(r *http.Request, b map[string]any) (any, error) {
 		return st.DecideRule(r.PathValue("id"), r.PathValue("decision"), s(b, "text"))
+	})
+	post("/api/learnings/{id}", func(r *http.Request, b map[string]any) (any, error) {
+		var cat *string
+		var ign *bool
+		if v, ok := b["category"].(string); ok {
+			cat = &v
+		}
+		if v, ok := b["ignored"].(bool); ok {
+			ign = &v
+		}
+		return st.UpdateLearning(r.PathValue("id"), cat, ign)
+	})
+
+	// ---- banque d'idées
+	post("/api/ideas/suggest", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SuggestIdeas(r.Context(), s(b, "account"))
+	})
+	post("/api/ideas/{id}/{action}", func(r *http.Request, b map[string]any) (any, error) {
+		if a := r.PathValue("action"); a == "draft" {
+			return st.DraftIdea(r.Context(), r.PathValue("id"))
+		} else {
+			return st.DecideIdea(r.PathValue("id"), a)
+		}
 	})
 	post("/api/learnings/{id}/remove", func(r *http.Request, b map[string]any) (any, error) {
 		id := r.PathValue("id")

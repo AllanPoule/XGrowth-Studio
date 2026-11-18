@@ -155,6 +155,7 @@ func systemPrompt(a *Account, d *Data) string {
 	fmt.Fprintf(&b, "Langue : %s.\n", lang)
 	fmt.Fprintf(&b, "Longueur : %d caractères maximum par post, liens compris.\n", maxLen(a))
 	b.WriteString(lengthLine(a))
+	b.WriteString(profileBlock(a))
 	if a.Goals != "" {
 		fmt.Fprintf(&b, "\n<objectifs>\n%s\n</objectifs>\nChaque post doit servir ces objectifs.\n", a.Goals)
 	}
@@ -188,10 +189,11 @@ func systemPrompt(a *Account, d *Data) string {
 		b.WriteString("</posts_de_reference>\n")
 	}
 	b.WriteString("\nÉcris comme une personne, pas comme une marque : une idée par post, concrète, sans hashtags en rafale ni emojis décoratifs, sans formule creuse d'introduction ou de conclusion. N'invente aucun chiffre, citation ou fait que tu ne tiens pas des éléments fournis.\n")
+	b.WriteString(placeholderRule)
 	if ls := d.LearningsFor(a.Name, 25); len(ls) > 0 {
-		b.WriteString("\n<retours_du_proprietaire>\nRetours donnés sur des brouillons précédents, à respecter :\n")
+		b.WriteString("\n<retours_du_proprietaire>\nRetours donnés sur des brouillons précédents, à respecter (les corrections montrent ce qu'il coupe, reformule ou ajoute) :\n")
 		for _, l := range ls {
-			fmt.Fprintf(&b, "- %s\n", l.Text)
+			fmt.Fprintf(&b, "- %s\n", learningLine(l))
 		}
 		b.WriteString("</retours_du_proprietaire>\n")
 	}
@@ -225,6 +227,7 @@ func oneLine(s string) string {
 type DraftRequest struct {
 	Brief string
 	Item  *Item
+	Idea  *Idea // idée retenue de la banque d'idées
 	N     int
 	Type  string    // type de post imposé (vide = au choix de l'IA, guidée par la répartition)
 	Now   time.Time // pour la répartition des types sur 30 jours
@@ -255,7 +258,11 @@ func GenerateDrafts(ctx context.Context, ai AI, a *Account, d *Data, req DraftRe
 		}
 		fmt.Fprintf(&u, "\n<consigne>\n%s\n</consigne>\n", PromptFor(a, d.Settings, "item"))
 	}
-	if req.Brief == "" && req.Item == nil {
+	if i := req.Idea; i != nil {
+		fmt.Fprintf(&u, "\nRédige le post à partir de cette idée retenue par le propriétaire :\n<idee>\nTitre : %s\nAngle : %s\nPourquoi : %s\n</idee>\n<consigne>\n%s\n</consigne>\n",
+			i.Title, i.Angle, i.Why, PromptFor(a, d.Settings, "ideaWrite"))
+	}
+	if req.Brief == "" && req.Item == nil && req.Idea == nil {
 		fmt.Fprintf(&u, "\nAucun sujet imposé : propose des idées originales.\n<consigne>\n%s\n</consigne>\n", PromptFor(a, d.Settings, "ideas"))
 	}
 	if len(types) > 0 {
