@@ -67,6 +67,13 @@ type Account struct {
 	AutoDraft     bool          `json:"autoDraft"` // rédige un brouillon pour chaque contenu gardé
 	DailyLimit    int           `json:"dailyLimit"`
 	Watch         []WatchTarget `json:"watch"`
+
+	// Affiner l'IA (tous facultatifs : un data.json plus ancien reste valide).
+	Goals     string     `json:"goals,omitempty"`     // objectifs du compte
+	Length    string     `json:"length,omitempty"`    // court | moyen | long (vide = court)
+	Examples  []string   `json:"examples,omitempty"`  // posts de référence pour le style
+	PostTypes []PostType `json:"postTypes,omitempty"` // vide = types communs des réglages
+	Prompts   AIPrompts  `json:"prompts,omitzero"`    // consignes propres au compte
 }
 
 type Metrics struct {
@@ -104,6 +111,8 @@ type Post struct {
 	TweetID     string     `json:"tweetId,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	SourceItem  string     `json:"sourceItem,omitempty"`
+	PostType    string     `json:"postType,omitempty"`    // type de post choisi par l'IA
+	VisualBrief string     `json:"visualBrief,omitempty"` // idée de visuel proposée par l'IA
 	History     []Revision `json:"history,omitempty"`
 	Metrics     *Metrics   `json:"metrics,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
@@ -128,10 +137,11 @@ type Item struct {
 }
 
 type Learning struct {
-	ID        string    `json:"id"`
-	Account   string    `json:"account"` // vide = tous les comptes
-	Text      string    `json:"text"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID            string     `json:"id"`
+	Account       string     `json:"account"` // vide = tous les comptes
+	Text          string     `json:"text"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	SynthesizedAt *time.Time `json:"synthesizedAt,omitempty"` // relu par une synthèse des retours
 }
 
 type Settings struct {
@@ -144,6 +154,14 @@ type Settings struct {
 	TriageMinScore float64  `json:"triageMinScore"`
 	MaxItemsPerRun int      `json:"maxItemsPerRun"`
 	Onboarded      bool     `json:"onboarded"`
+
+	// Affiner l'IA, pour tous les comptes.
+	Rules           []string   `json:"rules,omitempty"`     // règles d'écriture communes
+	PostTypes       []PostType `json:"postTypes,omitempty"` // types de posts communs
+	Prompts         AIPrompts  `json:"prompts,omitzero"`    // consignes communes par demande
+	RulesAutoAccept bool       `json:"rulesAutoAccept"`     // applique d'office les règles proposées
+	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
+	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
 }
 
 // Auth protège le studio web : mot de passe (PBKDF2) et sessions (hachées).
@@ -173,8 +191,10 @@ type Data struct {
 	Posts     []*Post    `json:"posts"`
 	Items     []*Item    `json:"items"`
 	Learnings []Learning `json:"learnings"`
-	Log       []LogEntry `json:"log"`
-	Auth      Auth       `json:"auth"`
+	// règles tirées des retours par la synthèse
+	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
+	Log           []LogEntry      `json:"log"`
+	Auth          Auth            `json:"auth"`
 }
 
 func defaultSettings() Settings {

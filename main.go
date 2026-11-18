@@ -63,6 +63,7 @@ func writeEnvelope(e envelope) {
 var boolFlags = map[string]bool{
 	"pretty": true, "now": true, "quote": true, "draft": true, "premium": true, "auto-triage": true,
 	"auto-draft": true, "no-scheduler": true, "help": true, "no-auth": true,
+	"rules-auto-accept": true, "auto-synthesis": true,
 }
 
 type args struct {
@@ -229,12 +230,12 @@ func main() {
 		emit(st.TriagePending(ctx, a.str("account"), false, a.boolean("draft")))
 
 	case "draft":
-		acct := need(a, 0, "draft <compte> [--topic \"...\"] [--item id] [-n 3]")
+		acct := need(a, 0, "draft <compte> [--topic \"...\"] [--item id] [-n 3] [--type clé]")
 		topic := a.str("topic")
 		if topic == "" {
 			topic = a.rest(1)
 		}
-		ps, err := st.GenerateDrafts(ctx, acct, topic, a.str("item"), a.integer("count", 3))
+		ps, err := st.GenerateDrafts(ctx, acct, topic, a.str("item"), a.integer("count", 3), a.str("type"))
 		check(err)
 		emit(ps)
 
@@ -356,6 +357,9 @@ func main() {
 
 	case "settings":
 		cmdSettings(store, a)
+
+	case "rules":
+		cmdRules(ctx, st, a)
 
 	case "log":
 		d := store.Snapshot()
@@ -561,6 +565,71 @@ func applyAccountFlags(acc *Account, a args) {
 	if a.has("daily-limit") {
 		acc.DailyLimit = a.integer("daily-limit", acc.DailyLimit)
 	}
+	if a.has("goals") {
+		acc.Goals = a.str("goals")
+	}
+	if a.has("length") {
+		acc.Length = a.str("length")
+	}
+	if a.has("examples-file") {
+		acc.Examples = nil
+		if f := a.str("examples-file"); f != "" {
+			b, err := os.ReadFile(f)
+			check(err)
+			acc.Examples = SplitExamples(string(b))
+		}
+	}
+	if a.has("post-types") {
+		acc.PostTypes = postTypesFlag(a.str("post-types"))
+	}
+	applyPromptFlags(&acc.Prompts, a)
+}
+
+// postTypesFlag lit --post-types : JSON, @fichier.json, « defaut » ou vide (aucun).
+func postTypesFlag(v string) []PostType {
+	switch v = strings.TrimSpace(v); {
+	case v == "" || v == "[]":
+		return nil
+	case v == "defaut" || v == "défaut":
+		return append([]PostType(nil), DefaultPostTypes...)
+	case strings.HasPrefix(v, "@"):
+		b, err := os.ReadFile(v[1:])
+		check(err)
+		v = string(b)
+	}
+	var out []PostType
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		fail("invalid_input", fmt.Errorf("--post-types : JSON invalide : %w", err))
+	}
+	return out
+}
+
+// applyPromptFlags : consignes par demande (vide = hérite du niveau supérieur).
+func applyPromptFlags(p *AIPrompts, a args) {
+	for flag, dst := range map[string]*string{"ideas-prompt": &p.Ideas, "item-prompt": &p.Item, "reply-prompt": &p.Reply,
+		"quote-prompt": &p.Quote, "rewrite-prompt": &p.Rewrite, "visual-guide": &p.Visual} {
+		if a.has(flag) {
+			*dst = a.str(flag)
+		}
+	}
+}
+
+func cmdRules(ctx context.Context, st *Studio, a args) {
+	switch a.arg(0) {
+	case "", "list":
+		d := st.store.Snapshot()
+		emit(map[string]any{"common": d.Settings.Rules, "learned": sortedRules(d.RuleProposals)})
+	case "synthesize":
+		r, err := st.Synthesize(ctx, a.str("account"))
+		check(err)
+		emit(r)
+	case "accept", "refuse", "revoke":
+		r, err := st.DecideRule(need(a, 1, "rules "+a.arg(0)+" <id>"), a.arg(0), a.str("text"))
+		check(err)
+		emit(r)
+	default:
+		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|accept|refuse|revoke"))
+	}
 }
 
 func cmdAccount(st *Studio, a args) {
@@ -686,7 +755,30 @@ func cmdSettings(store *Store, a args) {
 		if a.has("max-items") {
 			s.MaxItemsPerRun = a.integer("max-items", s.MaxItemsPerRun)
 		}
-		return nil
+		if a.has("rules") {
+			s.Rules = SplitLines(a.str("rules"))
+		}
+		if a.has("rules-file") {
+			s.Rules = nil
+			if f := a.str("rules-file"); f != "" {
+				b, err := os.ReadFile(f)
+				if err != nil {
+					return err
+				}
+				s.Rules = SplitLines(string(b))
+			}
+		}
+		if a.has("post-types") {
+			s.PostTypes = postTypesFlag(a.str("post-types"))
+		}
+		applyPromptFlags(&s.Prompts, a)
+		if a.has("rules-auto-accept") {
+			s.RulesAutoAccept = a.boolean("rules-auto-accept")
+		}
+		if a.has("auto-synthesis") {
+			s.AutoSynthesis = a.boolean("auto-synthesis")
+		}
+		return NormalizeSettings(s)
 	}))
 	emit(store.Snapshot().Settings)
 }
@@ -702,10 +794,16 @@ COMPTES
                     [--tz Europe/Paris] [--slots 09:00,12:30,18:00] [--lang français] [--premium]
                     [--voice "..."] [--instructions "..."] [--topics a,b] [--triage-rules "..."]
                     [--auto-triage] [--auto-draft] [--daily-limit 6]
+                    [--goals "..."] [--length court|moyen|long] [--examples-file posts.txt]
+                    [--post-types JSON|@types.json|defaut] [--ideas-prompt "..."] [--item-prompt "..."]
+                    [--reply-prompt "..."] [--quote-prompt "..."] [--rewrite-prompt "..."] [--visual-guide "..."]
   account set <nom> --option valeur      account list | show <nom> | remove <nom>
   account check <nom>                    vérifie la connexion à X et que c'est le bon compte
   settings [--provider claude-code|codex|gemini|anthropic] [--model m] [--effort medium]
            [--competitors a,b] [--banned x,y] [--min-gap 60] [--triage-min 6] [--max-items 40]
+           [--rules "une règle par ligne" | --rules-file regles.txt] [--post-types JSON|@types.json|defaut]
+           [--ideas-prompt …] [--item-prompt …] [--reply-prompt …] [--quote-prompt …] [--rewrite-prompt …]
+           [--visual-guide …] [--rules-auto-accept[=false]] [--auto-synthesis[=false]]
   providers                              IA détectées sur cette machine (Claude Code, Codex, Gemini, API)
   ai-test [--provider p] [--model m]     vérifie qu'une IA répond
 
@@ -720,13 +818,16 @@ VEILLE
   triage [--account c] [--draft]         tri par Claude (+ brouillons des contenus gardés)
 
 RÉDACTION
-  draft <compte> [--topic "..."] [--item id] [-n 3]   brouillons rédigés par Claude
+  draft <compte> [--topic "..."] [--item id] [-n 3] [--type clé]   brouillons rédigés par l'IA
   reply <compte> <url|id> [--quote]                   réponse (ou citation) rédigée par Claude
   write <compte> <texte> [--reply-to id] [--quote-of id] [--media fichier]   brouillon manuel
   posts [--account c] [--status draft|scheduled|published|failed|rejected]
   show <id> | edit <id> <texte> | media <id> <fichier|none>
   rewrite <id> --feedback "..."          réécriture par Claude (le retour devient une leçon)
   learn <leçon> [--account c] | learnings
+  rules [list]                           règles communes et règles apprises
+  rules synthesize [--account c]         l'IA tire des règles des retours (rejets, réécritures, leçons)
+  rules accept <id> [--text "..."] | refuse <id> | revoke <id>
 
 VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   validate <id> --by <nom> [--at "2026-11-20 09:00" | --at +2h | --now]

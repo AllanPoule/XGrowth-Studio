@@ -13,22 +13,45 @@ import (
 // ---------------------------------------------------------------- doublures
 
 type fakeAI struct {
-	calls   int
-	lastSys string
-	lastMsg string
+	calls      int
+	lastSys    string
+	lastMsg    string
+	lastSchema map[string]any
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
 	f.calls++
-	f.lastSys, f.lastMsg = system, user
+	f.lastSys, f.lastMsg, f.lastSchema = system, user, schema
 	var resp any
 	props := schema["properties"].(map[string]any)
 	switch {
 	case props["drafts"] != nil:
-		resp = map[string]any{"drafts": []map[string]string{
+		drafts := []map[string]string{
 			{"text": "Premier brouillon", "rationale": "r1"},
 			{"text": "Second brouillon", "rationale": "r2"},
-		}}
+		}
+		// le schéma d'un brouillon peut demander un type (le premier permis) et un visuel
+		item := props["drafts"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+		for _, d := range drafts {
+			if ty, ok := item["type"].(map[string]any); ok {
+				d["type"] = ty["enum"].([]any)[0].(string)
+			}
+			if item["visual"] != nil {
+				d["visual"] = "Un schéma simple"
+			}
+		}
+		resp = map[string]any{"drafts": drafts}
+	case props["rules"] != nil:
+		// une règle par retour cité (identifiants entre crochets)
+		var rules []map[string]any
+		for _, part := range strings.Split(user, "- [")[1:] {
+			id := part[:strings.Index(part, "]")]
+			rules = append(rules, map[string]any{"text": "Règle tirée de " + id, "rationale": "test", "evidence": []string{id}})
+		}
+		if len(rules) > 0 {
+			rules = append(rules, map[string]any{"text": "Règle commune", "rationale": "deux retours", "evidence": []string{rules[0]["evidence"].([]string)[0], rules[len(rules)-1]["evidence"].([]string)[0], "inconnu"}})
+		}
+		resp = map[string]any{"rules": rules}
 	case props["results"] != nil:
 		// garde les contenus dont le texte contient "agent"
 		var res []map[string]any
@@ -315,7 +338,7 @@ func TestRewriteStoresLearningAndFeedsPrompt(t *testing.T) {
 	if rp.Text != "Texte réécrit" || len(rp.History) != 1 {
 		t.Fatalf("%+v", rp)
 	}
-	if _, err := e.st.GenerateDrafts(context.Background(), "main", "sujet", "", 2); err != nil {
+	if _, err := e.st.GenerateDrafts(context.Background(), "main", "sujet", "", 2, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(e.ai.lastSys, "plus court, tutoie") {
