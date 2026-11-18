@@ -524,6 +524,9 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 			if r.Status != RuleProposed && r.Status != RuleRevoked {
 				return errors.New("seule une règle proposée ou retirée peut être acceptée")
 			}
+			if r.Source == RuleSourcePerformance && perfCapReached(d, r.Account) {
+				return fmt.Errorf("%d règles apprises en place pour ce compte au plus : retirez-en une d'abord", perfMaxAccepted)
+			}
 			if t := strings.TrimSpace(text); t != "" {
 				r.Text = t
 			}
@@ -546,6 +549,23 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 		return nil
 	})
 	return out, err
+}
+
+// perfCapReached : le compte a déjà perfMaxAccepted règles de performance en
+// place. Une règle sans compte vaut pour tous : le plafond est atteint si l'un
+// des comptes (ou les seules règles communes) l'atteint déjà.
+func perfCapReached(d *Data, account string) bool {
+	if perfAcceptedCount(d, account) >= perfMaxAccepted {
+		return true
+	}
+	if account == "" {
+		for _, a := range d.Accounts {
+			if perfAcceptedCount(d, a.Name) >= perfMaxAccepted {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // synthesisDue : synthèse hebdomadaire activée, dernière il y a 7 jours ou

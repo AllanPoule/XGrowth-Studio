@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -468,5 +469,138 @@ func TestCLIPostTypesFlag(t *testing.T) {
 	applyPromptFlags(&p, a)
 	if !a.boolean("rules-auto-accept") || a.boolean("auto-synthesis") || p.Reply != "Court." {
 		t.Fatalf("options : %+v %+v", a.flags, p)
+	}
+}
+
+// seedRules ajoute des règles apprises fictives au magasin.
+func (e *env) seedRules(t *testing.T, rules ...*RuleProposal) {
+	t.Helper()
+	if err := e.st.store.Update(func(d *Data) error {
+		for _, r := range rules {
+			if r.CreatedAt.IsZero() {
+				r.CreatedAt = e.now
+			}
+			d.RuleProposals = append(d.RuleProposals, r)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// learnedRules : n règles fictives de source donnée, toutes au même statut.
+func learnedRules(prefix, account, source, status string, n int) []*RuleProposal {
+	out := make([]*RuleProposal, n)
+	for i := range out {
+		out[i] = &RuleProposal{ID: fmt.Sprintf("%s%02d", prefix, i), Account: account, Source: source,
+			Text: fmt.Sprintf("Règle fictive %s %d.", prefix, i), Status: status}
+	}
+	return out
+}
+
+const capErr = "20 règles apprises en place pour ce compte au plus : retirez-en une d'abord"
+
+func TestDecideRuleCapsAcceptedRules(t *testing.T) {
+	e := newEnv(t)
+	decided := e.now.Add(-24 * time.Hour)
+	// 20 règles de performance en place pour main : 17 à son nom (dont une
+	// écrite avec une autre casse), 3 sans compte ; plus des règles qui ne
+	// comptent pas : règles écrites à la main, règle d'un autre compte.
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Settings.Rules = []string{"Règle commune 1.", "Règle commune 2.", "Règle commune 3."}
+		return nil
+	})
+	full := append(learnedRules("r_main", "main", RuleSourcePerformance, RuleAccepted, 16),
+		&RuleProposal{ID: "r_casse", Account: "MAIN", Source: RuleSourcePerformance, Text: "Règle en majuscules.", Status: RuleAccepted})
+	full = append(full, learnedRules("r_tous", "", RuleSourcePerformance, RuleAccepted, 3)...)
+	e.seedRules(t, full...)
+	e.seedRules(t, learnedRules("r_autre", "autre", RuleSourcePerformance, RuleAccepted, 5)...)
+	e.seedRules(t,
+		&RuleProposal{ID: "r_new", Account: "main", Source: RuleSourcePerformance, Text: "Règle de trop.", Status: RuleProposed},
+		&RuleProposal{ID: "r_back", Account: "main", Source: RuleSourcePerformance, Text: "Règle retirée.", Status: RuleRevoked, DecidedAt: &decided},
+		&RuleProposal{ID: "r_common", Source: RuleSourcePerformance, Text: "Règle commune de trop.", Status: RuleProposed})
+	if n := perfAcceptedCount(e.st.store.Snapshot(), "main"); n != perfMaxAccepted {
+		t.Fatalf("compteur : %d règles de performance pour main, %d attendues", n, perfMaxAccepted)
+	}
+
+	// une 21e règle : refusée, laissée telle quelle (statut, texte, date)
+	for _, id := range []string{"r_new", "r_back", "r_common"} {
+		before := *e.st.store.Snapshot().RuleProposal(id)
+		_, err := e.st.DecideRule(id, "accept", "Texte retouché.")
+		if err == nil || err.Error() != capErr {
+			t.Fatalf("%s : erreur attendue %q, obtenu %v", id, capErr, err)
+		}
+		after := e.st.store.Snapshot().RuleProposal(id)
+		if after.Status != before.Status || after.Text != before.Text {
+			t.Fatalf("%s modifiée malgré le plafond : %+v", id, after)
+		}
+		if (before.DecidedAt == nil) != (after.DecidedAt == nil) || (before.DecidedAt != nil && !after.DecidedAt.Equal(*before.DecidedAt)) {
+			t.Fatalf("%s : DecidedAt modifié malgré le plafond : %v -> %v", id, before.DecidedAt, after.DecidedAt)
+		}
+	}
+	if r := e.st.store.Snapshot().RuleProposal("r_new"); r.Status != RuleProposed || r.DecidedAt != nil {
+		t.Fatalf("la 21e règle doit rester proposée : %+v", r)
+	}
+
+	// retirer une règle libère une place ; les 3 règles écrites à la main et
+	// les 5 de l'autre compte ne comptent pas
+	if _, err := e.st.DecideRule("r_main00", "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.st.DecideRule("r_new", "accept", "")
+	if err != nil || r.Status != RuleAccepted {
+		t.Fatalf("après un retrait, l'acceptation doit réussir : %+v %v", r, err)
+	}
+	// le plafond est de nouveau atteint : la ré-acceptation d'une règle retirée bute
+	if _, err := e.st.DecideRule("r_back", "accept", ""); err == nil || err.Error() != capErr {
+		t.Fatalf("ré-acceptation au-delà du plafond : %v", err)
+	}
+	if _, err := e.st.DecideRule("r_main01", "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := e.st.DecideRule("r_back", "accept", ""); err != nil || r.Status != RuleAccepted || !r.DecidedAt.Equal(e.now) {
+		t.Fatalf("ré-acceptation d'une règle retirée : %+v %v", r, err)
+	}
+	if n := perfAcceptedCount(e.st.store.Snapshot(), "main"); n != perfMaxAccepted {
+		t.Fatalf("compteur après les décisions : %d", n)
+	}
+	// refuser et retirer ne sont pas concernés par le plafond
+	if _, err := e.st.DecideRule("r_common", "refuse", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.DecideRule("r_main02", "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDecideRuleCapIgnoresFeedbackRules(t *testing.T) {
+	// 20 règles de performance en place : une règle de retours s'accepte toujours
+	e := newEnv(t)
+	e.seedRules(t, learnedRules("r_perf", "main", RuleSourcePerformance, RuleAccepted, perfMaxAccepted)...)
+	e.seedRules(t,
+		&RuleProposal{ID: "r_old", Account: "main", Text: "Règle de retours d'avant le lot 1.", Status: RuleProposed},
+		&RuleProposal{ID: "r_fb", Account: "main", Source: RuleSourceFeedback, Text: "Règle de retours.", Status: RuleProposed},
+		&RuleProposal{ID: "r_fb_tous", Source: RuleSourceFeedback, Text: "Règle de retours commune.", Status: RuleRevoked},
+		&RuleProposal{ID: "r_perf_new", Account: "main", Source: RuleSourcePerformance, Text: "Règle de trop.", Status: RuleProposed})
+	for _, id := range []string{"r_old", "r_fb", "r_fb_tous"} {
+		if r, err := e.st.DecideRule(id, "accept", ""); err != nil || r.Status != RuleAccepted {
+			t.Fatalf("%s : une règle de retours s'accepte malgré le plafond : %+v %v", id, r, err)
+		}
+	}
+	if _, err := e.st.DecideRule("r_perf_new", "accept", ""); err == nil || err.Error() != capErr {
+		t.Fatalf("les règles de retours ne libèrent pas de place : %v", err)
+	}
+
+	// 20 règles de retours en place n'empêchent pas d'accepter une règle de performance
+	e = newEnv(t)
+	e.seedRules(t, learnedRules("r_fb", "main", RuleSourceFeedback, RuleAccepted, 10)...)
+	e.seedRules(t, learnedRules("r_vide", "main", "", RuleAccepted, 5)...)
+	e.seedRules(t, learnedRules("r_fbtous", "", RuleSourceFeedback, RuleAccepted, 5)...)
+	e.seedRules(t, &RuleProposal{ID: "r_perf", Account: "main", Source: RuleSourcePerformance, Text: "Règle de performance.", Status: RuleProposed})
+	if n := perfAcceptedCount(e.st.store.Snapshot(), "main"); n != 0 {
+		t.Fatalf("les règles de retours ne comptent pas : %d", n)
+	}
+	if r, err := e.st.DecideRule("r_perf", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("20 règles de retours ne bloquent pas une règle de performance : %+v %v", r, err)
 	}
 }
