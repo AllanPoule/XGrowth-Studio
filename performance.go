@@ -199,3 +199,16 @@ func ComputePerfDigest(d *Data, account string, now time.Time) PerfDigest {
 	}
 	return dg
 }
+
+// perfAcceptedCount : règles de performance acceptées qui valent pour le
+// compte (les siennes et celles sans compte). Les règles tirées des retours
+// et celles écrites à la main ne comptent pas (décision 1 d'Allan).
+func perfAcceptedCount(d *Data, account string) int {
+	n := 0
+	for _, r := range d.RuleProposals {
+		if r.Source == RuleSourcePerformance && r.Status == RuleAccepted && (r.Account == "" || strings.EqualFold(r.Account, account)) {
+			n++
+		}
+	}
+	return n
+}
