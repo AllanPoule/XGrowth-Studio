@@ -74,6 +74,14 @@ type Account struct {
 	Examples  []string   `json:"examples,omitempty"`  // posts de référence pour le style
 	PostTypes []PostType `json:"postTypes,omitempty"` // vide = types communs des réglages
 	Prompts   AIPrompts  `json:"prompts,omitzero"`    // consignes propres au compte
+
+	// Profil, IA, idées et programmation (facultatifs eux aussi).
+	Role       string       `json:"role,omitempty"`       // personnel | marque | automatise
+	Automated  bool         `json:"automated,omitempty"`  // compte ouvertement automatisé
+	AIProvider string       `json:"aiProvider,omitempty"` // vide = fournisseur des réglages
+	AIModel    string       `json:"aiModel,omitempty"`    // vide = modèle des réglages
+	Ideas      IdeaSettings `json:"ideas,omitzero"`
+	Timing     Timing       `json:"timing,omitzero"`
 }
 
 type Metrics struct {
@@ -113,6 +121,8 @@ type Post struct {
 	SourceItem  string     `json:"sourceItem,omitempty"`
 	PostType    string     `json:"postType,omitempty"`    // type de post choisi par l'IA
 	VisualBrief string     `json:"visualBrief,omitempty"` // idée de visuel proposée par l'IA
+	AIText      string     `json:"aiText,omitempty"`      // dernier texte écrit par l'IA (pour apprendre des corrections)
+	IdeaID      string     `json:"ideaId,omitempty"`      // idée de la banque dont le post est tiré
 	History     []Revision `json:"history,omitempty"`
 	Metrics     *Metrics   `json:"metrics,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
@@ -151,6 +161,12 @@ type Learning struct {
 	Text          string     `json:"text"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	SynthesizedAt *time.Time `json:"synthesizedAt,omitempty"` // relu par une synthèse des retours
+	Source        string     `json:"source,omitempty"`        // edit | rewrite | reject | manual
+	Category      string     `json:"category,omitempty"`      // fond | ton | longueur | fait | timing | visuel | autre
+	Ignored       bool       `json:"ignored,omitempty"`       // « ne pas apprendre »
+	PostID        string     `json:"postId,omitempty"`
+	Before        string     `json:"before,omitempty"` // correction : texte de l'IA
+	After         string     `json:"after,omitempty"`  // correction : texte du propriétaire
 }
 
 type Settings struct {
@@ -205,8 +221,10 @@ type Data struct {
 	Learnings []Learning `json:"learnings"`
 	// règles tirées des retours par la synthèse
 	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
-	Log           []LogEntry      `json:"log"`
-	Auth          Auth            `json:"auth"`
+	// banque d'idées de posts originaux
+	Ideas []*Idea    `json:"ideas,omitempty"`
+	Log   []LogEntry `json:"log"`
+	Auth  Auth       `json:"auth"`
 }
 
 func defaultSettings() Settings {
@@ -454,6 +472,9 @@ func (d *Data) LearningsFor(account string, max int) []Learning {
 	var out []Learning
 	for i := len(d.Learnings) - 1; i >= 0 && len(out) < max; i-- {
 		l := d.Learnings[i]
+		if l.Ignored {
+			continue
+		}
 		if l.Account == "" || strings.EqualFold(l.Account, account) {
 			out = append(out, l)
 		}

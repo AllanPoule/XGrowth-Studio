@@ -41,6 +41,12 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 			}
 		}
 		resp = map[string]any{"drafts": drafts}
+	case props["ideas"] != nil:
+		resp = map[string]any{"ideas": []map[string]string{
+			{"title": "Idée A", "angle": "angle A", "why": "pourquoi A"},
+			{"title": "Idée B", "angle": "angle B", "why": "pourquoi B"},
+			{"title": "Idée C", "angle": "angle C", "why": "pourquoi C"},
+		}}
 	case props["rules"] != nil:
 		// une règle par retour cité (identifiants entre crochets)
 		var rules []map[string]any
