@@ -91,9 +91,17 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			logs = logs[len(logs)-80:]
 		}
 		ai := st.aiSettings()
+		mix := map[string]TypeMix{}
+		for _, a := range d.Accounts {
+			if types := PostTypesFor(a, d.Settings); len(types) > 0 {
+				mix[a.Name] = ComputeTypeMix(d, a.Name, types, time.Now())
+			}
+		}
 		reply(w, map[string]any{
 			"accounts": d.Accounts, "posts": d.Posts, "items": items, "settings": d.Settings,
-			"learnings": d.Learnings, "log": logs, "calendar": calendar(d, 21, time.Now()),
+			"learnings": d.Learnings, "rules": sortedRules(d.RuleProposals), "typeMix": mix,
+			"defaults": map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
+			"log":      logs, "calendar": calendar(d, 21, time.Now()),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
@@ -163,7 +171,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 
 	// ---- rédaction et validation
 	post("/api/draft", func(r *http.Request, b map[string]any) (any, error) {
-		return st.GenerateDrafts(r.Context(), s(b, "account"), s(b, "topic"), s(b, "item"), n(b, "n", 3))
+		return st.GenerateDrafts(r.Context(), s(b, "account"), s(b, "topic"), s(b, "item"), n(b, "n", 3), s(b, "type"))
 	})
 	post("/api/reply", func(r *http.Request, b map[string]any) (any, error) {
 		return st.DraftReply(r.Context(), s(b, "account"), s(b, "ref"), bl(b, "quote"))
@@ -265,12 +273,22 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		var out Settings
 		err := st.store.Update(func(d *Data) error {
 			cur := d.Settings
+			// une liste envoyée remplace l'ancienne (json fusionnerait ses éléments)
+			for k, f := range map[string]func(){"rules": func() { cur.Rules = nil }, "postTypes": func() { cur.PostTypes = nil },
+				"competitors": func() { cur.Competitors = nil }, "bannedPhrases": func() { cur.BannedPhrases = nil }} {
+				if _, ok := b[k]; ok {
+					f()
+				}
+			}
 			raw, _ := json.Marshal(b)
 			// fusion : seuls les champs envoyés changent
 			if err := json.Unmarshal(raw, &cur); err != nil {
 				return err
 			}
-			cur.Onboarded = d.Settings.Onboarded
+			cur.Onboarded, cur.LastSynthesisAt = d.Settings.Onboarded, d.Settings.LastSynthesisAt
+			if err := NormalizeSettings(&cur); err != nil {
+				return err
+			}
 			d.Settings, out = cur, cur
 			return nil
 		})
@@ -282,6 +300,13 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		}
 		l := Learning{ID: newID("l"), Account: s(b, "account"), Text: s(b, "text"), CreatedAt: time.Now().UTC()}
 		return l, st.store.Update(func(d *Data) error { d.Learnings = append(d.Learnings, l); return nil })
+	})
+	// ---- règles apprises (synthèse des retours)
+	post("/api/rules/synthesize", func(r *http.Request, b map[string]any) (any, error) {
+		return st.Synthesize(r.Context(), s(b, "account"))
+	})
+	post("/api/rules/{id}/{decision}", func(r *http.Request, b map[string]any) (any, error) {
+		return st.DecideRule(r.PathValue("id"), r.PathValue("decision"), s(b, "text"))
 	})
 	post("/api/learnings/{id}/remove", func(r *http.Request, b map[string]any) (any, error) {
 		id := r.PathValue("id")

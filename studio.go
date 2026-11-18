@@ -84,6 +84,9 @@ func (s *Studio) SaveAccount(a *Account) error {
 	if a.DailyLimit == 0 {
 		a.DailyLimit = 6
 	}
+	if err := normalizeTuning(a); err != nil {
+		return err
+	}
 	return s.store.Update(func(d *Data) error {
 		if old := d.Account(a.Name); old != nil {
 			if a.Watch == nil {
@@ -261,7 +264,7 @@ func (s *Studio) AddDraft(account, text, replyTo, quoteOf, media string) (*Post,
 
 // GenerateDrafts fait rédiger n brouillons par Claude, à partir d'un brief
 // et/ou d'un contenu de veille.
-func (s *Studio) GenerateDrafts(ctx context.Context, account, brief, itemID string, n int) ([]*Post, error) {
+func (s *Studio) GenerateDrafts(ctx context.Context, account, brief, itemID string, n int, postType string) ([]*Post, error) {
 	a, d, err := s.accountAndData(account)
 	if err != nil {
 		return nil, err
@@ -272,13 +275,14 @@ func (s *Studio) GenerateDrafts(ctx context.Context, account, brief, itemID stri
 			return nil, fmt.Errorf("contenu %q inconnu", itemID)
 		}
 	}
-	outs, err := GenerateDrafts(ctx, s.aiClient(), a, d, brief, it, n)
+	outs, err := GenerateDrafts(ctx, s.aiClient(), a, d, DraftRequest{Brief: brief, Item: it, N: n, Type: postType, Now: s.now()})
 	if err != nil {
 		return nil, err
 	}
 	var posts []*Post
 	for _, o := range outs {
 		p := s.newPost(a.Name, "post", o.Text, o.Rationale)
+		p.PostType, p.VisualBrief = o.Type, strings.TrimSpace(o.Visual)
 		if it != nil {
 			p.SourceItem = it.ID
 		}
@@ -872,7 +876,7 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 			r.Kept += len(kept)
 			if draft || a.AutoDraft {
 				for _, id := range kept {
-					if _, err := s.GenerateDrafts(ctx, a.Name, "", id, 1); err == nil {
+					if _, err := s.GenerateDrafts(ctx, a.Name, "", id, 1, ""); err == nil {
 						r.Drafted++
 					}
 				}
@@ -945,6 +949,13 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
+	}
+	if synthesisDue(s.store.Snapshot(), s.now()) {
+		if r, err := s.Synthesize(ctx, ""); err == nil {
+			out["synthesis"] = r
+		} else {
+			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
+		}
 	}
 	return out
 }

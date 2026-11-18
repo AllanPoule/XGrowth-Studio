@@ -33,6 +33,7 @@ XGrowth Studio est un binaire unique (Go, aucune base de données externe) qui s
 | | |
 | --- | --- |
 | ✍️ **Rédaction** | Brouillons dans votre voix (ton, sujets, consignes), réponses et citations de posts X, réécriture guidée. Chaque retour devient une *leçon* réutilisée pour tous les posts suivants. |
+| 🎛️ **IA affinée** | Objectifs, longueur, posts de référence, types de posts avec part visée, consignes par demande (idées, veille, réponses, citations, réécritures, visuels), règles communes, et règles tirées de vos retours par une synthèse que vous validez. |
 | 🧠 **IA au choix** | Claude Code et Codex utilisent vos abonnements Claude ou ChatGPT déjà installés sur la machine. Gemini CLI et l'API Claude sont aussi disponibles. Le choix se fait dans l'interface, avec un test en direct. |
 | ✅ **Validation** | File « À valider » façon X : aperçu, compteur de caractères, retouche, validation signée, planification au prochain créneau libre ou à l'heure choisie. |
 | 🛡️ **Garde-fous** | Concurrents jamais nommés, expressions interdites, limite de longueur, pas de doublon, limite quotidienne, écart minimal entre deux posts. Tout est revérifié juste avant l'envoi, ainsi que l'identité du compte X connecté. |
@@ -79,6 +80,31 @@ l'API.
 ./xgrowth settings --provider claude-code       # le choix (aussi dans Réglages)
 ```
 
+## Affiner l'IA
+
+Tout ce qui oriente l'écriture se règle dans **Réglages › Affiner l'IA** (pour tous les comptes) et dans la fiche de
+chaque compte (**Modifier › Affiner l'IA pour ce compte**). Une consigne vide reprend celle du niveau au-dessus :
+compte, puis commun, puis une valeur par défaut neutre, affichée en grisé.
+
+| Réglage | Niveau | Effet |
+| --- | --- | --- |
+| Objectifs | compte | rappelés à chaque demande : chaque post doit les servir |
+| Longueur visée | compte | courte (défaut), moyenne ou longue ; la limite de 280 caractères reste sans X Premium |
+| Posts de référence | compte | 10 posts au plus dont l'IA imite le ton et le rythme, sans les recopier |
+| Règles d'écriture | commun | une par ligne, ajoutées à chaque demande |
+| Consignes par demande | commun et compte | idées originales (sans sujet), posts tirés de la veille, réponses, citations, réécritures |
+| Idée de visuel | commun et compte | renseignée, l'IA propose un visuel avec chaque brouillon (le studio ne génère pas d'image) |
+| Types de posts | commun et compte | libellé, effet recherché, part visée et consigne ; l'IA classe chaque brouillon et privilégie le type le plus en retard sur 30 jours (ou celui que vous imposez) |
+| Règles apprises | commun ou compte | la synthèse relit vos rejets, réécritures et leçons et propose des règles ; vous les acceptez (texte modifiable), refusez ou retirez. Option : les appliquer d'office, synthèse hebdomadaire automatique (désactivées par défaut) |
+
+```bash
+./xgrowth account set moncompte --goals "50 clients d'ici mars" --length moyen --post-types defaut
+./xgrowth account set moncompte --examples-file mes-posts.txt   # posts séparés par une ligne ---
+./xgrowth settings --rules-file regles.txt --reply-prompt "Une phrase, un fait vérifiable."
+./xgrowth draft moncompte --type coulisses
+./xgrowth rules synthesize --pretty && ./xgrowth rules accept <id>
+```
+
 ## Connexion à X
 
 | Mode | Ce qu'il faut | Remarques |
@@ -123,6 +149,7 @@ Chaque commande imprime une enveloppe JSON : `{"ok":true,"schema_version":"1","d
 ./xgrowth reply moncompte https://x.com/quelquun/status/123
 ./xgrowth posts --status draft --pretty
 ./xgrowth rewrite <id> --feedback "plus court, une seule idée"
+./xgrowth rules synthesize                        # règles proposées à partir des retours
 ./xgrowth validate <id> --by Prénom              # prochain créneau libre
 ./xgrowth watch add moncompte --search "agents IA lang:fr -is:retweet"
 ./xgrowth run                                     # planificateur seul (publication, veille, tri, stats)
@@ -173,7 +200,10 @@ replies and quotes in your voice with the AI you already have: **Claude Code** (
 **Codex** (your ChatGPT subscription), **Gemini CLI** or the **Claude API**. Nothing is published without your signed
 validation. Guardrails (competitor names, banned phrases, length, duplicates, daily limits, connected-account
 identity) are checked again right before sending. It also watches accounts and searches, triages what deserves a
-post, schedules on time slots and tracks performance.
+post, schedules on time slots and tracks performance. The AI can be tuned per account and globally: goals, target
+length, reference posts, post types with target shares, per-request instructions (original ideas, watch items,
+replies, quotes, rewrites, visual ideas), common writing rules, and rules distilled from your feedback that you
+accept, refuse or revoke.
 
 ```bash
 make build && ./xgrowth serve   # then open http://127.0.0.1:8787 and follow the onboarding

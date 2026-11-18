@@ -29,6 +29,8 @@ const I = {
   quote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>',
+  sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
   bulb: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg>',
   out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>',
@@ -46,6 +48,8 @@ let S = null;            // état serveur
 let P = null;            // fournisseurs d'IA détectés
 const edits = {};        // textes modifiés non enregistrés
 let busy = false;
+let dirty = false;       // formulaire modifié et pas encore enregistré : pas de rafraîchissement automatique
+document.addEventListener("input", e => { if (e.target.closest("#view")) dirty = true });
 
 const PROVIDER_STYLE = {
   "claude-code": { bg: "linear-gradient(135deg,#d97757,#b4532a)", l: "CC" },
@@ -105,6 +109,10 @@ const nf = n => new Intl.NumberFormat("fr-FR", { notation: n >= 10000 ? "compact
 const acct = n => (S.accounts || []).find(a => a.name === n);
 const handleOf = n => acct(n)?.handle || n;
 const maxLen = n => acct(n)?.premium ? 4000 : 280;
+// affiner l'IA : types de posts et consignes effectifs d'un compte (compte → commun → défaut)
+const typesFor = a => (a?.postTypes?.length ? a.postTypes : S.settings.postTypes) || [];
+const typeLabel = (accName, key) => typesFor(acct(accName)).find(t => t.key === key)?.label || key;
+const inheritedPrompt = k => S.settings.prompts?.[k] || S.defaults?.prompts?.[k] || "";
 const tweetURL = p => p.tweetId && !String(p.tweetId).startsWith("dry-") ? `https://x.com/${handleOf(p.account)}/status/${p.tweetId}` : null;
 const who = () => store.get("who", "");
 const providerName = id => (P || []).find(p => p.id === id)?.name || ({ "claude-code": "Claude Code", codex: "Codex (ChatGPT)", gemini: "Gemini CLI", anthropic: "API Claude" }[id] || id);
@@ -188,6 +196,7 @@ function counts() {
 
 function render() {
   if (!S) return;
+  dirty = false;
   const r = route(), c = counts();
   const prov = S.ai?.provider, pinfo = (P || []).find(p => p.id === prov);
   const navItem = ([k, l, ic], cls = "") => `<a href="#/${k}" class="${k === r ? "on" : ""} ${cls}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`;
@@ -223,7 +232,7 @@ function tweetCard(p, mode) {
   return `<article class="tweet" data-id="${p.id}">
     <div class="av">${esc(h[0] || "x")}</div>
     <div style="min-width:0">
-      <div class="tw-head"><b>${esc(a?.displayName || h)}</b><span class="h">@${esc(h)}</span><span class="h small">${when}</span><span class="spacer"></span>${KIND[p.kind] ? `<span class="pill">${KIND[p.kind]}</span>` : ""}${statusPill(p.status)}</div>
+      <div class="tw-head"><b>${esc(a?.displayName || h)}</b><span class="h">@${esc(h)}</span><span class="h small">${when}</span><span class="spacer"></span>${p.postType ? `<span class="pill">${esc(typeLabel(p.account, p.postType))}</span>` : ""}${KIND[p.kind] ? `<span class="pill">${KIND[p.kind]}</span>` : ""}${statusPill(p.status)}</div>
       ${target}
       ${editable ? `<textarea class="tw-edit" data-edit="${p.id}" rows="4">${esc(text)}</textarea>` : `<div class="tw-text">${esc(text)}</div>`}
       <div class="tw-meta">${editable ? `${ring(n, max)}<span class="cnt ${n > max ? "over" : ""}" data-cnt="${p.id}">${n} / ${max}</span>` : ""}
@@ -232,6 +241,7 @@ function tweetCard(p, mode) {
         ${p.metrics ? `<span class="small muted">👁 ${nf(p.metrics.views)} · ♥ ${nf(p.metrics.likes)} · ↻ ${nf(p.metrics.retweets)} · ${p.metrics.engagementRatePct.toFixed(1)} %</span>` : ""}
         ${url ? `<a class="small" href="${url}" target="_blank" rel="noopener">Voir sur X ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
+      ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
       ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span><button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
@@ -302,6 +312,7 @@ function composerBox(ctx) {
   if (!S.accounts.length) return empty(I.gear, "Aucun compte", "Ajoutez un compte X dans les réglages.", `<a class="btn primary" href="#/settings">Réglages</a>`);
   return `<div class="composer glow"><textarea id="brief-${ctx}" placeholder="De quoi voulez-vous parler ? Un sujet, une anecdote, une idée en vrac… (vide = idées originales)">${esc(store.get("brief", ""))}</textarea>
     <div class="bar">${accountSelect("acc-" + ctx)}
+      <select id="type-${ctx}" style="width:auto" class="${typesFor(acct(store.get("acc", S.accounts[0]?.name))).length ? "" : "hidden"}" title="Type de post">${typeOptions(store.get("acc", S.accounts[0]?.name))}</select>
       <div class="seg" id="n-${ctx}">${[1, 3, 5].map(n => `<button data-n="${n}" class="${n === +store.get("n", 3) ? "on" : ""}">${n}</button>`).join("")}</div>
       <span class="small muted">brouillon(s) par ${esc(providerName(S.ai?.provider))}</span><span class="spacer"></span>
       <button class="btn primary" data-act="generate" data-ctx="${ctx}">${I.spark} Générer</button></div></div>
@@ -314,7 +325,18 @@ function bindComposer(v, ctx) {
   ta.oninput = () => store.set("brief", ta.value);
   ta.onkeydown = e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $(`[data-act=generate][data-ctx=${ctx}]`, v).click() };
   $$(`#n-${ctx} button`, v).forEach(b => b.onclick = () => { store.set("n", b.dataset.n); $$(`#n-${ctx} button`, v).forEach(x => x.classList.toggle("on", x === b)) });
-  $("#acc-" + ctx, v).onchange = e => store.set("acc", e.target.value);
+  $("#acc-" + ctx, v).onchange = e => {
+    store.set("acc", e.target.value);
+    const sel = $("#type-" + ctx, v);
+    sel.innerHTML = typeOptions(e.target.value);
+    sel.classList.toggle("hidden", !typesFor(acct(e.target.value)).length);
+  };
+}
+
+function typeOptions(accName) {
+  const types = typesFor(acct(accName)), next = S.typeMix?.[accName]?.next;
+  return `<option value="">Type : au choix de l'IA${next ? ` (priorité : ${esc(types.find(t => t.key === next)?.label || next)})` : ""}</option>` +
+    types.map(t => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("");
 }
 
 function vQueue(v) {
@@ -422,6 +444,70 @@ function providerCards(selected, prefix = "") {
   }).join("")}</div>`;
 }
 
+// ------------------------------------------------------------------ affiner l'IA
+const PROMPT_KINDS = [
+  ["ideas", "Idées originales", "Quand vous générez sans sujet : ce qu'est une bonne idée pour ce compte, ce qu'il faut éviter."],
+  ["item", "Posts tirés de la veille", "Pour un brouillon écrit à partir d'un contenu repéré (actualité, signet, compte suivi)."],
+  ["reply", "Réponses", "Pour répondre à un post : ce que la réponse doit apporter."],
+  ["quote", "Citations", "Pour citer un post : comment ajouter votre angle."],
+  ["rewrite", "Réécritures", "Envoyée avant votre retour à chaque « Réécrire »."],
+  ["visual", "Idée de visuel", "Renseignée, l'IA propose un visuel avec chaque brouillon (le studio ne génère pas l'image). Vide : pas de proposition."],
+];
+
+// consignes par demande ; `inherit(k)` = valeur héritée, montrée en grisé
+function promptsFields(prompts, inherit, prefix) {
+  return `<div class="grid2">${PROMPT_KINDS.map(([k, label, hint]) => `<div><label class="l" for="${prefix}${k}">${label}</label>
+    <textarea id="${prefix}${k}" data-prompt="${k}" rows="3" placeholder="${esc(inherit(k) || "Aucune : pas d'idée de visuel")}">${esc(prompts?.[k] || "")}</textarea><div class="hint">${hint}</div></div>`).join("")}</div>`;
+}
+const readPrompts = box => Object.fromEntries($$("[data-prompt]", box).map(t => [t.dataset.prompt, t.value.trim()]));
+
+function typeRow(t = {}) {
+  return `<div class="ptype" data-key="${esc(t.key || "")}">
+    <div class="ptype-head"><input data-f="label" value="${esc(t.label || "")}" placeholder="Libellé (ex. Coulisses)" aria-label="Libellé du type">
+      <input data-f="goal" value="${esc(t.goal || "")}" placeholder="Effet recherché (ex. confiance)" aria-label="Effet recherché">
+      <label class="share"><input data-f="share" type="number" min="0" max="100" value="${t.share ?? 25}" aria-label="Part visée en pourcentage"><span>%</span></label>
+      <button class="btn ghost sm" data-act="pt-del" title="Retirer ce type" aria-label="Retirer ce type">${I.x}</button></div>
+    <textarea data-f="prompt" rows="2" placeholder="Consigne d'écriture de ce type">${esc(t.prompt || "")}</textarea></div>`;
+}
+
+// éditeur de types de posts ; `empty` = texte affiché quand la liste est vide
+function typesEditor(types, empty) {
+  return `<div class="ptypes" data-types>${(types || []).map(typeRow).join("")}</div>
+    <p class="hint ptypes-empty">${empty}</p>
+    <div class="row" style="margin-top:8px"><button class="btn sm" data-act="pt-add">Ajouter un type</button><button class="btn ghost sm" data-act="pt-defaults">Partir des 4 types par défaut</button></div>`;
+}
+const readTypes = box => $$(".ptype", $("[data-types]", box)).map(r => ({
+  key: r.dataset.key, label: $("[data-f=label]", r).value.trim(), goal: $("[data-f=goal]", r).value.trim(),
+  share: +$("[data-f=share]", r).value || 0, prompt: $("[data-f=prompt]", r).value.trim(),
+})).filter(t => t.label || t.prompt);
+
+function mixLine(name) {
+  const m = S.typeMix?.[name];
+  if (!m || !m.total) return "";
+  return `<div class="hint">Sur 30 jours (${m.total} posts typés) : ${m.mix.map(x => `${esc(x.label)} ${x.actual} % / ${x.target} %`).join(" · ")}.</div>`;
+}
+
+const RULE_STATUS = { proposed: ["Proposée", "warn"], accepted: ["En place", "ok"], refused: ["Refusée", ""], revoked: ["Retirée", ""] };
+function rulesBlock() {
+  const rules = S.rules || [], pending = (S.learnings || []).filter(l => !l.synthesizedAt).length;
+  const scope = r => r.account ? "@" + esc(handleOf(r.account)) : "Tous";
+  const row = r => `<tr><td class="small muted" style="width:90px">${scope(r)}</td>
+    <td>${r.status === "proposed" ? `<input data-rule="${r.id}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}</td>
+    <td style="width:1%;white-space:nowrap"><span class="pill ${RULE_STATUS[r.status][1]}">${RULE_STATUS[r.status][0]}</span>
+      ${r.status === "proposed" ? `<button class="btn sm primary" data-act="rule-accept" data-id="${r.id}">Accepter</button><button class="btn sm ghost" data-act="rule-refuse" data-id="${r.id}">Refuser</button>`
+        : r.status === "accepted" ? `<button class="btn sm ghost" data-act="rule-revoke" data-id="${r.id}">Retirer</button>`
+        : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${r.id}">Remettre</button>` : ""}</td></tr>`;
+  const live = rules.filter(r => r.status === "proposed" || r.status === "accepted"), old = rules.filter(r => r.status === "refused" || r.status === "revoked");
+  return `<h3 style="margin-top:22px">Règles apprises</h3>
+    <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>
+    <div class="row"><label class="toggle"><input type="checkbox" data-setting="rulesAutoAccept" ${S.settings.rulesAutoAccept ? "checked" : ""}><span class="sw"></span>Appliquer d'office les règles proposées</label>
+      <label class="toggle"><input type="checkbox" data-setting="autoSynthesis" ${S.settings.autoSynthesis ? "checked" : ""}><span class="sw"></span>Synthèse chaque semaine</label>
+      <span class="spacer"></span><span class="small muted">${pending} retour${pending > 1 ? "s" : ""} à synthétiser</span>
+      <button class="btn sm" data-act="synthesize" ${pending < 2 ? "disabled title=\"2 retours au moins\"" : ""}>${I.spark} Synthétiser maintenant</button></div>
+    ${live.length ? `<table style="margin-top:12px">${live.map(row).join("")}</table>` : `<p class="hint">Aucune règle apprise pour l'instant.</p>`}
+    ${old.length ? `<details class="tune" style="margin-top:10px"><summary>Règles refusées ou retirées (${old.length})</summary><table>${old.map(row).join("")}</table></details>` : ""}`;
+}
+
 function vSettings(v) {
   const s = S.settings, sel = S.ai?.provider;
   v.innerHTML = `<div class="head"><div><h1>Réglages</h1><p>Votre IA, vos comptes X et vos garde-fous.</p></div><span class="small faint">v${esc(S.version)}</span></div>
@@ -434,6 +520,15 @@ function vSettings(v) {
       <div id="ai-out"></div></div>
     <h2>Comptes X</h2>${S.accounts.map(accountForm).join("")}
     <div class="card"><div class="row between"><div><h3>Ajouter un compte</h3><p class="small muted" style="margin:0">L'assistant vous guide : connexion à X, voix, rythme.</p></div><button class="btn" data-act="wizard-account">Ajouter</button></div></div>
+    <h2>Affiner l'IA</h2>
+    <div class="card" id="tune-common"><p class="small muted" style="margin-top:0">Valable pour tous les comptes. Chaque compte peut remplacer ces réglages (Comptes X › Modifier › Affiner l'IA pour ce compte).</p>
+      <label class="l" for="rules">Règles d'écriture communes</label><textarea id="rules" rows="4" placeholder="Une règle par ligne. Ex. : N'invente jamais un chiffre.">${esc((s.rules || []).join("\n"))}</textarea>
+      <div class="hint">Ajoutées à chaque demande, avec les règles apprises en place. Les consignes propres à un compte restent dans sa fiche.</div>
+      <h3 style="margin-top:22px">Consignes par demande</h3><p class="small muted" style="margin-top:0">Vide : la consigne par défaut, affichée en grisé.</p>
+      ${promptsFields(s.prompts, k => S.defaults?.prompts?.[k], "gp-")}
+      <h3 style="margin-top:22px">Types de posts</h3><p class="small muted" style="margin-top:0">Chaque brouillon relève d'un type ; l'IA privilégie le type le plus en retard sur sa part visée (30 derniers jours).</p>
+      ${typesEditor(s.postTypes, "Aucun type commun : l'IA écrit sans type, sauf pour les comptes qui ont les leurs.")}
+      <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" data-act="tune-save">Enregistrer</button></div></div>
     <h2>Garde-fous</h2>
     <div class="card"><div class="grid"><div><label class="l">Écart minimal entre deux posts</label><select id="gap">${[15, 30, 60, 120, 180, 240].map(m => `<option value="${m}" ${s.minGapMinutes === m ? "selected" : ""}>${m < 60 ? m + " min" : m / 60 + " h"}</option>`).join("")}</select></div>
       <div><label class="l">Score minimal pour garder un contenu</label><input id="tmin" type="number" step="0.5" min="0" max="10" value="${s.triageMinScore}"></div>
@@ -441,13 +536,18 @@ function vSettings(v) {
       <label class="l">Concurrents jamais nommés</label><input id="comp" value="${esc((s.competitors || []).join(", "))}" placeholder="Acme, Globex"><div class="hint">Un post qui en nomme un est bloqué à la validation et juste avant l'envoi.</div>
       <label class="l">Expressions interdites</label><input id="ban" value="${esc((s.bannedPhrases || []).join(", "))}" placeholder="révolutionnaire, game changer">
       <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" data-act="guards-save">Enregistrer</button></div></div>
-    <h2>Leçons apprises</h2>
+    <h2>Leçons et règles apprises</h2>
     <div class="card"><p class="small muted" style="margin-top:0">Ajoutées à chaque demande à l'IA. Vos retours de réécriture et motifs de rejet arrivent ici automatiquement.</p>
       <div class="row"><select id="la" style="width:auto"><option value="">Tous les comptes</option>${S.accounts.map(a => `<option value="${esc(a.name)}">@${esc(a.handle || a.name)}</option>`).join("")}</select><input id="lt" placeholder="Ex. : jamais de question rhétorique en accroche" style="flex:1;width:auto"><button class="btn" data-act="learn">Ajouter</button></div>
-      ${(S.learnings || []).length ? `<table style="margin-top:12px">${S.learnings.slice().reverse().map(l => `<tr><td class="small muted" style="width:120px">${l.account ? "@" + esc(handleOf(l.account)) : "Tous"}</td><td>${esc(l.text)}</td><td style="width:40px"><button class="btn ghost sm" data-act="unlearn" data-id="${l.id}">✕</button></td></tr>`).join("")}</table>` : ""}</div>
+      ${(S.learnings || []).length ? `<table style="margin-top:12px">${S.learnings.slice().reverse().map(l => `<tr><td class="small muted" style="width:120px">${l.account ? "@" + esc(handleOf(l.account)) : "Tous"}</td><td>${esc(l.text)}${l.synthesizedAt ? ` <span class="small faint">· synthétisé</span>` : ""}</td><td style="width:40px"><button class="btn ghost sm" data-act="unlearn" data-id="${l.id}">✕</button></td></tr>`).join("")}</table>` : ""}
+      ${rulesBlock()}</div>
     <h2>Journal</h2>
     <div class="card" style="padding:6px 8px;max-height:320px;overflow:auto"><table>${(S.log || []).slice().reverse().map(e => `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(e.at, { dateStyle: "short", timeStyle: "short" })}</td><td><span class="pill ${e.level === "error" ? "bad" : ""}">${e.level}</span></td><td class="small">${esc(e.message)}</td></tr>`).join("") || `<tr><td class="muted">Rien pour l'instant.</td></tr>`}</table></div>`;
+  $$("[data-setting]", v).forEach(i => i.onchange = () => run(null, () => api("/api/settings", { [i.dataset.setting]: i.checked }), "Réglage enregistré"));
+  $$("[data-types]", v).forEach(syncTypesEmpty);
 }
+
+function syncTypesEmpty(box) { box.parentElement.querySelector(".ptypes-empty")?.classList.toggle("hidden", !!box.children.length) }
 
 function accountForm(a) {
   const be = { agentx: "AgentX (session X)", xapi: "API X officielle", dryrun: "Simulation" }[a.backend] || a.backend;
@@ -471,6 +571,18 @@ function accountForm(a) {
         <label class="toggle"><input type="checkbox" name="premium" ${a.premium ? "checked" : ""}><span class="sw"></span>X Premium</label>
         <label class="toggle"><input type="checkbox" name="autoTriage" ${a.autoTriage ? "checked" : ""}><span class="sw"></span>Tri automatique</label>
         <label class="toggle"><input type="checkbox" name="autoDraft" ${a.autoDraft ? "checked" : ""}><span class="sw"></span>Brouillons automatiques</label></div>
+      <details class="tune" style="margin-top:18px"><summary>${I.sliders} Affiner l'IA pour ce compte</summary>
+        <label class="l">Objectifs du compte</label><textarea name="goals" rows="2" placeholder="Ex. : 50 clients pour l'outil d'audit d'ici mars ; être la référence française sur les agents IA">${esc(a.goals || "")}</textarea>
+        <div class="hint">Chaque post doit les servir. L'IA les lit avant d'écrire.</div>
+        <div class="grid"><div><label class="l">Longueur visée</label><select name="length">${[["court", "Courte (une à trois phrases)"], ["moyen", "Moyenne (un paragraphe)"], ["long", "Longue (X Premium)"]].map(([k, l]) => `<option value="${k}" ${(a.length || "court") === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <div class="hint">Sans X Premium, la limite reste 280 caractères.</div></div></div>
+        <label class="l">Posts de référence</label><textarea name="examples" rows="5" placeholder="Collez des posts dont vous aimez le style (les vôtres ou ceux d'autres), séparés par une ligne contenant seulement ---">${esc((a.examples || []).join("\n---\n"))}</textarea>
+        <div class="hint">10 au plus. L'IA s'inspire de leur ton et de leur rythme sans les recopier.</div>
+        <h3 style="margin-top:20px">Types de posts de ce compte</h3>
+        ${typesEditor(a.postTypes, `Vide : les types communs s'appliquent (${(S.settings.postTypes || []).length || "aucun"}).`)}${mixLine(a.name)}
+        <h3 style="margin-top:20px">Consignes propres à ce compte</h3><p class="small muted" style="margin-top:0">Vide : la consigne commune (ou par défaut), affichée en grisé.</p>
+        ${promptsFields(a.prompts, inheritedPrompt, "ap-" + esc(a.name) + "-")}
+      </details>
       <div class="row" style="margin-top:16px"><button class="btn ghost danger sm" data-act="acc-del" data-name="${esc(a.name)}">Supprimer</button><span class="spacer"></span><button class="btn primary" data-act="acc-save" data-name="${esc(a.name)}">Enregistrer</button></div></div></div>`;
 }
 
@@ -481,8 +593,11 @@ function readAccountForm(card, base) {
     if (i.type === "checkbox") o[k] = i.checked;
     else if (k === "slots" || k === "topics") o[k] = i.value.split(",").map(x => x.trim()).filter(Boolean);
     else if (k === "dailyLimit") o[k] = +i.value;
+    else if (k === "examples") o[k] = i.value.split(/^\s*---\s*$/m).map(x => x.trim()).filter(Boolean);
     else o[k] = i.value.trim();
   });
+  o.postTypes = readTypes(card);
+  o.prompts = readPrompts(card);
   return o;
 }
 
@@ -491,8 +606,8 @@ const actions = {
   async theme() { store.set("theme", store.get("theme", "dark") === "dark" ? "light" : "dark"); applyTheme() },
   async logout() { await api("/api/auth/logout", {}); S = null; boot() },
   async generate(b) {
-    const ctx = b.dataset.ctx, acc = $("#acc-" + ctx).value, topic = $("#brief-" + ctx).value, n = +store.get("n", 3);
-    const ps = await run(b, () => api("/api/draft", { account: acc, topic, n }), r => `${r.length} brouillon${r.length > 1 ? "s" : ""} prêt${r.length > 1 ? "s" : ""} à valider`, { wait: "Écriture…", noReload: true });
+    const ctx = b.dataset.ctx, acc = $("#acc-" + ctx).value, topic = $("#brief-" + ctx).value, n = +store.get("n", 3), type = $("#type-" + ctx)?.value || "";
+    const ps = await run(b, () => api("/api/draft", { account: acc, topic, n, type }), r => `${r.length} brouillon${r.length > 1 ? "s" : ""} prêt${r.length > 1 ? "s" : ""} à valider`, { wait: "Écriture…", noReload: true });
     store.set("brief", "");
     S = await api("/api/state");
     if (route() === "queue") return render();
@@ -558,6 +673,21 @@ const actions = {
     const L = id => $(id).value.split(",").map(x => x.trim()).filter(Boolean);
     await run(b, () => api("/api/settings", { minGapMinutes: +$("#gap").value, triageMinScore: +$("#tmin").value, maxItemsPerRun: +$("#maxi").value, competitors: L("#comp"), bannedPhrases: L("#ban") }), "Garde-fous enregistrés");
   },
+  async "tune-save"(b) {
+    const box = $("#tune-common");
+    await run(b, () => api("/api/settings", { rules: $("#rules").value.split("\n").map(x => x.trim()).filter(Boolean), prompts: readPrompts(box), postTypes: readTypes(box) }), "Réglages de l'IA enregistrés");
+  },
+  async "pt-add"(b) { dirty = true; const box = b.parentElement.parentElement.querySelector("[data-types]"); box.insertAdjacentHTML("beforeend", typeRow({ share: 25 })); syncTypesEmpty(box); $(".ptype:last-child [data-f=label]", box).focus() },
+  async "pt-defaults"(b) { dirty = true;
+    const box = b.parentElement.parentElement.querySelector("[data-types]");
+    if (box.children.length && !confirm("Remplacer les types affichés par les 4 types par défaut ?")) return;
+    box.innerHTML = (S.defaults?.postTypes || []).map(typeRow).join(""); syncTypesEmpty(box);
+  },
+  async "pt-del"(b) { dirty = true; const box = b.closest("[data-types]"); b.closest(".ptype").remove(); syncTypesEmpty(box) },
+  async synthesize(b) { await run(b, () => api("/api/rules/synthesize", {}), r => r.proposed.length ? `${r.proposed.length} règle(s) tirée(s) de ${r.examined} retours` : `${r.examined} retours relus, aucune règle nouvelle`, { wait: "Synthèse…" }) },
+  async "rule-accept"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/accept`, { text: $(`[data-rule="${b.dataset.id}"]`)?.value || "" }), "Règle en place") },
+  async "rule-refuse"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/refuse`, {}), "Règle refusée") },
+  async "rule-revoke"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/revoke`, {}), "Règle retirée") },
   async learn(b) { await run(b, () => api("/api/learnings", { account: $("#la").value, text: $("#lt").value }), "Leçon ajoutée") },
   async unlearn(b) { await run(b, () => api(`/api/learnings/${b.dataset.id}/remove`, {})) },
 };
@@ -611,7 +741,7 @@ const wizard = {
   start(step = 0, addOnly = false) {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris";
     this.w = { step, addOnly, provider: S.ai?.provider || (P || []).find(p => p.available)?.id || "anthropic", model: S.ai?.model || "", test: null,
-      method: "agentx", profile: null, session: "", handle: "", voice: "", topics: [], language: "français", tz, rhythm: 1, validator: who(),
+      method: "agentx", profile: null, session: "", handle: "", voice: "", goals: "", topics: [], language: "français", tz, rhythm: 1, validator: who(),
       competitors: (S.settings.competitors || []).join(", "), watch: [], drafts: null, saved: null };
     this.render();
   },
@@ -682,6 +812,7 @@ const wizard = {
       <div class="chips">${VOICES.map(([t, d], i) => `<span class="chip ${w.voice === d ? "on" : ""}" data-act="ob-voice" data-i="${i}">${t}</span>`).join("")}</div>
       <label class="l">Votre voix</label><textarea id="ov" placeholder="Ton, style, personnalité, ce que vous ne faites jamais…">${esc(w.voice)}</textarea>
       <label class="l">Vos sujets (séparés par des virgules)</label><input id="ot" value="${esc(w.topics.join(", "))}" placeholder="IA, produit, entrepreneuriat">
+      <label class="l">Vos objectifs (facultatif)</label><input id="og" value="${esc(w.goals)}" placeholder="Ex. : trouver mes 50 premiers clients, recruter un associé">
       <div class="grid"><div><label class="l">Langue des posts</label><input id="ol" value="${esc(w.language)}"></div></div>
       ${this.nav()}`;
   },
@@ -714,7 +845,7 @@ const wizard = {
     const w = this.w, val = id => ($("#" + id)?.value || "").trim();
     if (w.step === 1) w.model = val("obm");
     if (w.step === 2 && w.method !== "agentx") { w.handle = val("oh").replace(/^@/, ""); if (w.method === "xapi") w.tokenEnv = val("otk") }
-    if (w.step === 3) { w.voice = val("ov"); w.topics = val("ot").split(",").map(x => x.trim()).filter(Boolean); w.language = val("ol") || "français" }
+    if (w.step === 3) { w.goals = val("og"); w.voice = val("ov"); w.topics = val("ot").split(",").map(x => x.trim()).filter(Boolean); w.language = val("ol") || "français" }
     if (w.step === 4) { w.tz = val("otz"); w.validator = val("owho"); w.competitors = val("ocomp") }
   },
   async next(b) {
@@ -735,7 +866,7 @@ const wizard = {
       const [, slots, n] = RHYTHMS[w.rhythm];
       const name = w.handle.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "principal";
       const acc = { name, handle: w.handle, displayName: w.profile?.name || "", backend: w.method, agentxAccount: w.method === "agentx" ? w.session : "", xapiTokenEnv: w.tokenEnv || "",
-        language: w.language, timezone: w.tz, slots, dailyLimit: n + 1, voice: w.voice, topics: w.topics, instructions: "", triageRules: "", autoTriage: w.watch.length > 0, autoDraft: false, premium: false };
+        language: w.language, timezone: w.tz, slots, dailyLimit: n + 1, voice: w.voice, goals: w.goals, topics: w.topics, instructions: "", triageRules: "", autoTriage: w.watch.length > 0, autoDraft: false, premium: false };
       w.saved = await run(b, () => api("/api/accounts", acc), null, { noReload: true });
       for (const t of w.watch) await api("/api/watch", { account: name, kind: t.kind, value: t.value, every: 60 }).catch(err => toast(err.message, true));
       store.set("acc", name);
@@ -794,7 +925,7 @@ const wizard = {
 setInterval(async () => {
   if (!S || busy || document.hidden || $(".overlay")) return;
   if (document.activeElement && /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) return;
-  if (Object.keys(edits).length) return;
+  if (Object.keys(edits).length || dirty) return;
   try { S = await api("/api/state"); render() } catch {}
 }, 25000);
 
