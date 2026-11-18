@@ -13,6 +13,7 @@ Add `--pretty` only when a human reads the output.
 **Never run `xgrowth validate`.** Validation is the human's signature that allows publishing. Prepare drafts, then
 tell the human which post ids are waiting and that they validate them in the studio (`xgrowth serve`) or with
 `xgrowth validate <id> --by <their name>`. Never run `publish-due` or `run` unless the human asked for it.
+Reordering planned posts (`reorder <id> <id>…`, `move <id> <YYYY-MM-DD>`) changes when they go out: only on request.
 
 ## Read
 

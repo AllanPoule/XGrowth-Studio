@@ -213,6 +213,23 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	post("/api/posts/{id}/reject", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Reject(r.PathValue("id"), s(b, "reason"))
 	})
+	post("/api/posts/{id}/schedule", func(r *http.Request, b map[string]any) (any, error) {
+		return st.ScheduleDraft(r.PathValue("id"), s(b, "by"), s(b, "before"))
+	})
+	post("/api/posts/{id}/move", func(r *http.Request, b map[string]any) (any, error) {
+		return st.MoveToDay(r.PathValue("id"), s(b, "day"))
+	})
+	post("/api/schedule/reorder", func(r *http.Request, b map[string]any) (any, error) {
+		var ids []string
+		if list, ok := b["ids"].([]any); ok {
+			for _, x := range list {
+				if v, ok := x.(string); ok {
+					ids = append(ids, v)
+				}
+			}
+		}
+		return st.ReorderQueue(ids)
+	})
 	post("/api/posts/{id}/unschedule", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Unschedule(r.PathValue("id"))
 	})

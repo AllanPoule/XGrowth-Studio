@@ -317,10 +317,13 @@ function vHome(v) {
     </div>
     <h2>Écrire vite</h2>${composerBox("home")}
     <div class="grid2" style="margin-top:4px">
-      <div><h2>Prochain post</h2>${next ? tweetCard(next, "view") : empty(I.cal, "Rien de planifié", "Validez un brouillon : il prend le prochain créneau libre.")}</div>
-      <div><h2>Derniers brouillons</h2>${drafts.length ? drafts.map(p => `<a href="#/queue" style="text-decoration:none;color:inherit;display:block">${tweetCard(p, "view")}</a>`).join("") : empty(I.inbox, "Aucun brouillon", "Générez-en depuis Créer ou la Veille.")}</div>
+      <div><h2>Prochains posts</h2>${next ? `<div class="qlist" data-dropqueue>${planned.slice(0, 6).map(queueTile).join("")}</div>
+        <p class="hint">Glissez une tuile pour changer l'ordre, ou déposez-y un brouillon pour le valider à cet endroit : les heures suivent la programmation du compte.</p>`
+        : `<div class="qlist" data-dropqueue>${empty(I.cal, "Rien de planifié", "Validez un brouillon, ou glissez-le ici : il prend le prochain créneau libre.")}</div>`}</div>
+      <div><h2>Derniers brouillons</h2>${drafts.length ? drafts.map(p => `<a href="#/queue" draggable="true" data-drag="draft" data-id="${p.id}" style="text-decoration:none;color:inherit;display:block">${tweetCard(p, "view")}</a>`).join("") : empty(I.inbox, "Aucun brouillon", "Générez-en depuis Créer ou la Veille.")}</div>
     </div>`;
   bindComposer(v, "home");
+  bindDnD(v);
 }
 
 function sparkline(posts) {
@@ -329,6 +332,74 @@ function sparkline(posts) {
   const max = Math.max(...pts) || 1, w = 160, h = 40;
   const d = pts.map((y, i) => `${(i / (pts.length - 1)) * w},${h - (y / max) * (h - 4) - 2}`).join(" ");
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="sg" x1="0" x2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs><polyline points="${d}" fill="none" stroke="url(#sg)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// ------------------------------------------------------------------ glisser-déposer de la file
+// Les heures viennent toujours de la programmation des comptes : réordonner
+// redistribue les heures déjà calculées, déposer sur un jour prend le premier
+// créneau libre de ce jour, déposer un brouillon le valide (signé) à cet endroit.
+const dayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function queueTile(p) {
+  const drag = p.status === "scheduled" && !p.campaignId;
+  return `<div class="qtile ${drag ? "" : "fixed"}"${drag ? ` draggable="true" data-drag="planned" data-id="${p.id}"` : ""}>
+    <div class="row"><span class="qt-when">${p.status === "validated" ? "Dans la minute" : esc(fmtDate(p.scheduledAt))}</span><span class="small muted">@${esc(handleOf(p.account))}</span><span class="spacer"></span>${drag ? `<span class="qt-grip" aria-hidden="true">⋮⋮</span>` : ""}</div>
+    <div class="qt-text">${esc(p.text)}</div></div>`;
+}
+
+let DRAG = null;
+function clearMarks() { $$(".drop-before,.drop-end,.drop-on").forEach(x => x.classList.remove("drop-before", "drop-end", "drop-on")) }
+function dropBefore(list, y) {
+  return $$(":scope > [data-drag]", list).filter(el => el.dataset.id !== DRAG?.id)
+    .find(el => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2 }) || null;
+}
+
+function bindDnD(root) {
+  $$("[data-drag]", root).forEach(el => {
+    el.addEventListener("dragstart", e => {
+      DRAG = { id: el.dataset.id, kind: el.dataset.drag };
+      el.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", el.dataset.id);
+    });
+    el.addEventListener("dragend", () => { el.classList.remove("dragging"); clearMarks(); DRAG = null });
+  });
+  $$("[data-dropqueue]", root).forEach(list => {
+    list.addEventListener("dragover", e => {
+      if (!DRAG) return;
+      e.preventDefault();
+      clearMarks();
+      const b = dropBefore(list, e.clientY);
+      b ? b.classList.add("drop-before") : list.classList.add("drop-end");
+    });
+    list.addEventListener("dragleave", e => { if (!list.contains(e.relatedTarget)) clearMarks() });
+    list.addEventListener("drop", e => { e.preventDefault(); const d = DRAG, b = dropBefore(list, e.clientY); clearMarks(); if (d) dropOnQueue(list, d, b) });
+  });
+  $$("[data-dropday]", root).forEach(day => {
+    day.addEventListener("dragover", e => { if (DRAG?.kind !== "planned") return; e.preventDefault(); clearMarks(); day.classList.add("drop-on") });
+    day.addEventListener("dragleave", e => { if (!day.contains(e.relatedTarget)) day.classList.remove("drop-on") });
+    day.addEventListener("drop", e => {
+      e.preventDefault(); clearMarks();
+      const d = DRAG;
+      if (d?.kind === "planned") run(null, () => api(`/api/posts/${d.id}/move`, { day: day.dataset.dropday }), r => `Reprogrammé ${fmtDate(r.scheduledAt)}`);
+    });
+  });
+}
+
+async function dropOnQueue(list, d, before) {
+  if (d.kind === "draft") {
+    let by = who();
+    if (!by) { by = (prompt("Votre nom, pour signer la validation :") || "").trim(); if (!by) return; store.set("who", by) }
+    return run(null, async () => {
+      if (edits[d.id] !== undefined) { await api(`/api/posts/${d.id}/edit`, { text: edits[d.id] }); delete edits[d.id] }
+      return api(`/api/posts/${d.id}/schedule`, { by, before: before?.dataset.id || "" });
+    }, r => `Validé et planifié ${fmtDate(r.scheduledAt)}`);
+  }
+  const ids = $$(":scope > [data-drag=planned]", list).map(el => el.dataset.id).filter(id => id !== d.id);
+  const i = before ? ids.indexOf(before.dataset.id) : -1;
+  ids.splice(i < 0 ? ids.length : i, 0, d.id);
+  if (ids.length < 2) return;
+  return run(null, () => api("/api/schedule/reorder", { ids }), "Nouvel ordre enregistré : les heures suivent la programmation");
 }
 
 function composerBox(ctx) {
@@ -420,9 +491,11 @@ function vCalendar(v) {
   const planned = S.posts.filter(p => p.status === "scheduled" || p.status === "validated").sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
   v.innerHTML = `<div class="head"><div><h1>Calendrier</h1><p>${planned.length} post${planned.length > 1 ? "s" : ""} planifié${planned.length > 1 ? "s" : ""}.</p></div>
     <div class="row"><button class="btn sm" data-act="week" data-d="-1">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
-    <div class="week">${days.map(d => `<div class="day ${sameDay(d, new Date()) ? "today" : ""}"><div class="d">${d.toLocaleDateString("fr-FR", { weekday: "short" })}<b>${d.getDate()}</b></div>
-      ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · @${esc(handleOf(e.p.account))}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
-    <h2>File de publication</h2>${planned.length ? planned.map(p => tweetCard(p, "planned")).join("") : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
+    <div class="week">${days.map(d => `<div class="day ${sameDay(d, new Date()) ? "today" : ""}" data-dropday="${dayKey(d)}"><div class="d">${d.toLocaleDateString("fr-FR", { weekday: "short" })}<b>${d.getDate()}</b></div>
+      ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${e.p.status === "scheduled" && !e.p.campaignId ? ` draggable="true" data-drag="planned" data-id="${e.p.id}"` : ""}><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · @${esc(handleOf(e.p.account))}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
+    <h2>File de publication</h2>${planned.length ? `<p class="hint" style="margin-top:-6px">Glissez un post sur un jour pour le caler au premier créneau libre de ce jour, ou dans la file pour changer l'ordre.</p>
+      <div data-dropqueue>${planned.map(p => p.status === "scheduled" && !p.campaignId ? `<div draggable="true" data-drag="planned" data-id="${p.id}">${tweetCard(p, "planned")}</div>` : tweetCard(p, "planned")).join("")}</div>` : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
+  bindDnD(v);
 }
 
 // « New » : contenus récupérés depuis la visite précédente de la veille. La
