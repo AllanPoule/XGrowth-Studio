@@ -24,7 +24,7 @@ import (
 )
 
 // Une version par pull request fusionnée (voir CHANGELOG.md).
-const version = "0.05"
+const version = "0.06"
 
 var pretty bool
 
