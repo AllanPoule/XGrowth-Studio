@@ -367,6 +367,15 @@ func perfRequest(d *Data, a *Account, dg PerfDigest) string {
 // les appels tentés échouent, l'analyse renvoie une erreur (pour l'API et la
 // CLI), après avoir enregistré cette date et le journal.
 func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfResult, error) {
+	return s.analyzePerformance(ctx, account, false)
+}
+
+// analyzePerformance fait le travail d'AnalyzePerformance. auto vaut true pour
+// l'analyse lancée par le planificateur (Tick) : si elle échoue entièrement, la
+// ligne de journal qui dit quand aura lieu le nouvel essai est ajoutée dans la
+// même écriture que le reste, car une analyse ne fait qu'un store.Update
+// (§4.3.1).
+func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bool) (*PerfResult, error) {
 	d := s.store.Snapshot()
 	now := s.now().UTC()
 	var accounts []*Account
@@ -419,6 +428,7 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 			todo = append(todo, p)
 		}
 	}
+	allFailed := failed != nil && len(todo) == 0
 	err := s.store.Update(func(d *Data) error {
 		for _, p := range todo {
 			// textes déjà connus, de tout statut et de tout compte, comme
@@ -490,18 +500,28 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 		// analyse interrompue avant tout appel ne la change pas. Une analyse
 		// lancée plus tôt qui finit après une autre ne la fait pas reculer
 		// (elle sert au déclenchement hebdomadaire).
-		if attempted == 0 && failed != nil {
-			return nil
+		if attempted > 0 || failed == nil {
+			if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
+				d.Settings.LastPerfAnalysisAt = &now
+			}
 		}
-		if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
-			d.Settings.LastPerfAnalysisAt = &now
+		if auto && allFailed {
+			// catégorie fixe : le détail de l'erreur n'est pas journalisé.
+			// Le nouvel essai n'est promis au prochain passage que si
+			// l'analyse est encore due après la mise à jour de la date.
+			next := fmt.Sprintf("nouvel essai quand %d jours seront passés et %d nouvelles publications faites",
+				int(perfAutoEvery/(24*time.Hour)), perfAutoMinNewPosts)
+			if perfAnalysisDue(d, now) {
+				next = "nouvel essai au prochain passage"
+			}
+			d.AddLog("error", "analyse des performances : %s, %s", perfErrorKind(failed), next)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if failed != nil && len(todo) == 0 {
+	if allFailed {
 		return nil, fmt.Errorf("analyse des performances : aucun appel IA n'a abouti : %w", failed)
 	}
 	return res, nil

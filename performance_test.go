@@ -1018,6 +1018,89 @@ func TestPerfAnalysisDueIgnoresDryRunPosts(t *testing.T) {
 	}
 }
 
+// Correction de LOT1-T6 (relecture 1) : l'échec total de l'analyse automatique
+// est journalisé par l'analyse elle-même, dans sa seule écriture, avec le vrai
+// délai du nouvel essai ; l'analyse manuelle (API, CLI) garde son erreur sans
+// cette ligne.
+func TestPerfAutoAnalysisFailureLog(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	const marker = "MARQUEUR-FICTIF-7f3a"
+	bad := &failingAI{msg: "HTTP 429 : quota épuisé " + marker}
+	e.st.ai = func(Settings) AI { return bad }
+	newLines := func(from int) []LogEntry {
+		d := e.st.store.Snapshot()
+		var out []LogEntry
+		for _, l := range d.Log[from:] {
+			if strings.HasPrefix(l.Message, "analyse des performances") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+
+	// analyse manuelle en échec total : erreur renvoyée, une ligne par
+	// compte, aucune promesse de nouvel essai
+	n := len(e.st.store.Snapshot().Log)
+	if _, err := e.st.AnalyzePerformance(ctx, ""); err == nil || !strings.Contains(err.Error(), "aucun appel IA n'a abouti") {
+		t.Fatalf("analyse manuelle : erreur attendue, reçu %v", err)
+	}
+	if ls := newLines(n); len(ls) != 1 || ls[0].Level != "error" || strings.Contains(ls[0].Message, "nouvel essai") {
+		t.Fatalf("analyse manuelle, journal : %+v", ls)
+	}
+
+	// analyse automatique en échec total : la ligne du compte et celle du
+	// nouvel essai, qui annonce le délai de sept jours et les cinq nouvelles
+	// publications exigés par perfAnalysisDue
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	if !perfAnalysisDue(e.st.store.Snapshot(), e.now) {
+		t.Fatal("fixture : l'analyse automatique doit être due")
+	}
+	n = len(e.st.store.Snapshot().Log)
+	calls := bad.calls
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || bad.calls != calls+1 {
+		t.Fatalf("Tick : %d appel(s) IA, attendu 1 et pas de résultat", bad.calls-calls)
+	}
+	ls := newLines(n)
+	if len(ls) != 2 {
+		t.Fatalf("Tick : %d ligne(s) de journal, attendu 2 : %+v", len(ls), ls)
+	}
+	want := fmt.Sprintf("nouvel essai quand %d jours seront passés et %d nouvelles publications faites",
+		int(perfAutoEvery/(24*time.Hour)), perfAutoMinNewPosts)
+	if l := ls[1]; l.Level != "error" || !strings.HasSuffix(l.Message, want) || !strings.Contains(want, "7 jours") ||
+		!strings.Contains(want, "5 nouvelles publications") {
+		t.Fatalf("Tick, ligne du nouvel essai : %+v", l)
+	}
+	for _, l := range e.st.store.Snapshot().Log {
+		if strings.Contains(l.Message, marker) || strings.Contains(l.Message, "quota") {
+			t.Fatalf("message du fournisseur au journal : %+v", l)
+		}
+	}
+
+	// analyse automatique interrompue avant tout appel : la date ne bouge
+	// pas, l'analyse reste due, le nouvel essai est au prochain passage
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	before := *e.st.store.Snapshot().Settings.LastPerfAnalysisAt
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	n = len(e.st.store.Snapshot().Log)
+	calls = bad.calls
+	if _, err := e.st.analyzePerformance(cctx, "", true); !errors.Is(err, context.Canceled) || bad.calls != calls {
+		t.Fatalf("contexte annulé : %v, %d appel(s)", err, bad.calls-calls)
+	}
+	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; !last.Equal(before) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, before)
+	}
+	if ls := newLines(n); len(ls) != 2 || !strings.HasSuffix(ls[1].Message, "annulée, nouvel essai au prochain passage") {
+		t.Fatalf("contexte annulé, journal : %+v", ls)
+	}
+}
+
 // Le journal de l'analyse automatique ne reçoit qu'une catégorie fixe.
 func TestPerfErrorKindIsFixed(t *testing.T) {
 	const marker = "MARQUEUR-FICTIF-7f3a"
