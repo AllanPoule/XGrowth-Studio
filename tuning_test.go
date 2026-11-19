@@ -604,3 +604,65 @@ func TestDecideRuleCapIgnoresFeedbackRules(t *testing.T) {
 		t.Fatalf("20 règles de retours ne bloquent pas une règle de performance : %+v %v", r, err)
 	}
 }
+
+// Critère 3 de LOT1-T7 : le texte retouché à l'acceptation d'une règle de
+// performance passe ruleTextOK tel que reçu (avant TrimSpace), sinon erreur et
+// règle inchangée (texte, statut, date) ; les chiffres restent permis au
+// propriétaire ; les règles de retours ne changent pas.
+func TestDecideRuleChecksEditedPerformanceText(t *testing.T) {
+	e := newEnv(t)
+	decided := e.now.Add(-24 * time.Hour)
+	e.seedRules(t,
+		&RuleProposal{ID: "r_perf", Account: "main", Source: RuleSourcePerformance, Text: "Favorise les exemples concrets.", Status: RuleProposed},
+		&RuleProposal{ID: "r_back", Account: "main", Source: RuleSourcePerformance, Text: "Favorise les listes.", Status: RuleRevoked, DecidedAt: &decided},
+		&RuleProposal{ID: "r_fb", Account: "main", Source: RuleSourceFeedback, Text: "Évite le jargon.", Status: RuleProposed},
+		&RuleProposal{ID: "r_old", Account: "main", Text: "Règle de retours d'avant le lot 1.", Status: RuleProposed})
+	bad := map[string]string{
+		"   ":                                   "texte vide",
+		strings.Repeat("é", perfMaxRuleChars+1): "plus de 240 caractères",
+		"Une ligne\npuis une autre":             "retour à la ligne",
+		"Termine par <script>":                  "balise",
+		"Ajoute https://exemple.test":           "lien",
+		"Cite @quelquun":                        "mention",
+		"Favorise​ les exemples":                "caractère invisible",
+		"Favorise les exemples\U000E0069":       "caractère invisible",
+		"Favorise⁦ les exemples⁩ concrets":      "caractère invisible",
+		// vérifiés avant le nettoyage : TrimSpace les effacerait
+		"Favorise les exemples concrets.\n":         "retour à la ligne",
+		"Favorise les exemples concrets.\r\n":       "retour à la ligne",
+		strings.Repeat("é", perfMaxRuleChars) + " ": "plus de 240 caractères",
+	}
+	for _, id := range []string{"r_perf", "r_back"} {
+		for text, why := range bad {
+			before := *e.st.store.Snapshot().RuleProposal(id)
+			_, err := e.st.DecideRule(id, "accept", text)
+			if err == nil || !strings.Contains(err.Error(), why) {
+				t.Errorf("%s, texte %q : erreur %v, attendu %q", id, text, err, why)
+			}
+			after := e.st.store.Snapshot().RuleProposal(id)
+			if after.Text != before.Text || after.Status != before.Status ||
+				(before.DecidedAt == nil) != (after.DecidedAt == nil) || (before.DecidedAt != nil && !after.DecidedAt.Equal(*before.DecidedAt)) {
+				t.Errorf("%s modifiée malgré un texte refusé : %+v", id, after)
+			}
+		}
+	}
+	// retouche valide, avec des chiffres : acceptée, sans les espaces autour
+	r, err := e.st.DecideRule("r_perf", "accept", "  Écris 3 lignes au plus, avec un exemple concret.  ")
+	if err != nil || r.Status != RuleAccepted || r.Text != "Écris 3 lignes au plus, avec un exemple concret." || !r.DecidedAt.Equal(e.now) {
+		t.Fatalf("retouche valide refusée : %+v %v", r, err)
+	}
+	// sans retouche, le texte de la règle est gardé
+	if r, err := e.st.DecideRule("r_back", "accept", ""); err != nil || r.Status != RuleAccepted || r.Text != "Favorise les listes." {
+		t.Fatalf("acceptation sans retouche : %+v %v", r, err)
+	}
+	// règles de retours : comportement inchangé, le texte retouché n'est pas vérifié
+	if r, err := e.st.DecideRule("r_fb", "accept", "Évite le jargon, cf. https://exemple.test"); err != nil || r.Text != "Évite le jargon, cf. https://exemple.test" {
+		t.Fatalf("règle de retours retouchée : %+v %v", r, err)
+	}
+	if r, err := e.st.DecideRule("r_old", "accept", "   "); err != nil || r.Text != "Règle de retours d'avant le lot 1." {
+		t.Fatalf("règle de retours sans retouche : %+v %v", r, err)
+	}
+	if rules := e.st.store.Snapshot().RulesFor("main"); len(rules) != 4 {
+		t.Fatalf("règles en place : %q", rules)
+	}
+}

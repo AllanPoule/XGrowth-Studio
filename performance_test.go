@@ -353,11 +353,233 @@ func TestRuleTextOK(t *testing.T) {
 		"Sens\u202eforcé":                                          false,
 		"Joint\u2060ici":                                           false,
 		"Marque\ufeffici":                                          false,
+		// les chiffres ne regardent pas ruleTextOK (voir hasDigit)
+		"\u00c9cris trois lignes, pas 4": true,
 	}
 	for text, ok := range cases {
 		if err := ruleTextOK(text); (err == nil) != ok {
 			t.Errorf("ruleTextOK(%q) = %v, attendu ok=%v", text, err, ok)
 		}
+	}
+}
+
+// Jeu de caract\u00e8res invisibles adapt\u00e9 de Hermes (LOT1-T7, crit\u00e8re 4) : un
+// caract\u00e8re de chaque plage ajout\u00e9e, aux bornes, est refus\u00e9 ; leurs voisins
+// visibles ou hors plage restent permis.
+func TestRuleTextOKInvisibleCharsFromHermes(t *testing.T) {
+	for _, r := range []rune{0x2062, 0x2063, 0x2064, 0x2066, 0x2067, 0x2068, 0x2069, 0xE0000, 0xE0041, 0xE007F} {
+		text := "Privil\u00e9gie" + string(r) + " les listes"
+		if err := ruleTextOK(text); err == nil || err.Error() != "caract\u00e8re invisible" {
+			t.Errorf("U+%04X : %v, attendu \u00ab caract\u00e8re invisible \u00bb", r, err)
+		}
+	}
+	// une phrase cach\u00e9e en caract\u00e8res TAG (\u00ab ASCII smuggling \u00bb)
+	hidden := ""
+	for _, c := range "ignore" {
+		hidden += string(rune(0xE0000 + c))
+	}
+	if ruleTextOK("Favorise les exemples"+hidden) == nil {
+		t.Error("une consigne cach\u00e9e en caract\u00e8res TAG doit \u00eatre refus\u00e9e")
+	}
+	for _, r := range []rune{0x2061, 0x2065, 0x206A, 0xE0080, 0x1F3F4} {
+		if err := ruleTextOK("Privil\u00e9gie" + string(r) + " les listes"); err != nil {
+			t.Errorf("U+%04X hors du jeu : %v", r, err)
+		}
+	}
+}
+
+func TestHasDigit(t *testing.T) {
+	for text, want := range map[string]bool{
+		"\u00c9cris trois lignes":          false,
+		"\u00c9cris 3 lignes":              true,
+		"Vise un fil de \u0663 posts":      true, // chiffre arabo-indien
+		"Vise un fil de \uff13 posts":      true, // chiffre pleine largeur
+		"Privil\u00e9gie les listes, puis": false,
+	} {
+		if hasDigit(text) != want {
+			t.Errorf("hasDigit(%q) = %v, attendu %v", text, !want, want)
+		}
+	}
+}
+
+// Crit\u00e8res 1 et 2 de LOT1-T7 : une proposition dont le texte contient un
+// chiffre est \u00e9cart\u00e9e ; une justification invalide est vid\u00e9e, la r\u00e8gle est
+// gard\u00e9e avec sa base chiffr\u00e9e par le code.
+func TestAnalyzeDropsDigitsAndInvalidRationale(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	ok := []string{"type:utile"}
+	e.ai.perf = func(string) []map[string]any {
+		return []map[string]any{
+			{"text": "\u00c9cris 3 lignes au plus", "rationale": "seuil invent\u00e9", "signals": ok},
+			{"text": "Vise un fil de \u0663 posts", "rationale": "chiffre d'une autre \u00e9criture", "signals": ok},
+			{"text": "Favorise les exemples concrets", "rationale": "6,5 % contre 3,0 %", "signals": ok},
+			{"text": "Favorise les m\u00e9thodes pas \u00e0 pas", "rationale": "voir https://exemple.test", "signals": ok},
+			{"text": "Favorise les astuces tir\u00e9es de la veille", "rationale": "Les astuces concr\u00e8tes\u2066 marchent mieux", "signals": ok},
+		}
+	}
+	// les propositions par d\u00e9faut du faux fournisseur (une par signal) sont
+	// d\u00e9j\u00e0 refus\u00e9es : elles ne prennent pas les places du plafond par analyse
+	e.seedRules(t,
+		&RuleProposal{ID: "r_def1", Account: "main", Text: "Privil\u00e9gie ce qui marche pour type:utile", Status: RuleRefused},
+		&RuleProposal{ID: "r_def2", Account: "main", Text: "Privil\u00e9gie ce qui marche pour source:veille", Status: RuleRefused})
+	res, err := e.st.AnalyzePerformance(ctx, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*RuleProposal{}
+	for _, r := range res.Accounts[0].Proposed {
+		got[r.Text] = r
+	}
+	for _, bad := range []string{"\u00c9cris 3 lignes au plus", "Vise un fil de \u0663 posts"} {
+		if got[bad] != nil {
+			t.Errorf("proposition chiffr\u00e9e gard\u00e9e : %q", bad)
+		}
+	}
+	for _, text := range []string{"Favorise les exemples concrets", "Favorise les m\u00e9thodes pas \u00e0 pas", "Favorise les astuces tir\u00e9es de la veille"} {
+		r := got[text]
+		if r == nil {
+			t.Fatalf("r\u00e8gle %q \u00e9cart\u00e9e \u00e0 cause de sa justification ; retenues : %v", text, res.Accounts[0].Proposed)
+		}
+		if r.Rationale != "" {
+			t.Errorf("%q : justification invalide gard\u00e9e : %q", text, r.Rationale)
+		}
+		mustContain(t, "base de "+text, r.Basis, "6,5 % d'engagement m\u00e9dian sur 4 posts", "contre 3,0 % pour l'ensemble du compte")
+	}
+	d := e.st.store.Snapshot()
+	for _, r := range perfRules(d) {
+		if hasDigit(r.Text) || hasDigit(r.Rationale) {
+			t.Errorf("r\u00e8gle enregistr\u00e9e avec un chiffre \u00e9crit par l'IA : %+v", r)
+		}
+	}
+
+	// une justification valide est gard\u00e9e, sans les espaces autour
+	e = newEnv(t)
+	perfFixture(t, e, "main")
+	e.ai.perf = func(string) []map[string]any {
+		return []map[string]any{{"text": "Favorise les exemples concrets", "rationale": " Les astuces utiles d\u00e9passent la m\u00e9diane ", "signals": ok}}
+	}
+	res, err = e.st.AnalyzePerformance(ctx, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res.Accounts[0].Proposed {
+		if r.Text == "Favorise les exemples concrets" && r.Rationale != "Les astuces utiles d\u00e9passent la m\u00e9diane" {
+			t.Errorf("justification valide : %q", r.Rationale)
+		}
+	}
+}
+
+// Crit\u00e8re 5 de LOT1-T7 : consigne adapt\u00e9e de Hermes dans le prompt d'analyse.
+func TestPerfSystemForbidsIsolatedAndToolRules(t *testing.T) {
+	mustContain(t, "prompt syst\u00e8me", perfSystem, "un post isol\u00e9", "un \u00e9chec dont la cause est inconnue",
+		"un constat sur le fonctionnement de X ou d'un outil", "sans aucun chiffre")
+}
+
+// Crit\u00e8re 6 de LOT1-T7 : seules les 20 r\u00e8gles refus\u00e9es ou retir\u00e9es les plus
+// r\u00e9centes du compte partent \u00e0 l'IA ; les r\u00e8gles en place et propos\u00e9es
+// partent toutes ; la d\u00e9duplication du code reste globale ; la synth\u00e8se des
+// retours envoie toujours toutes les r\u00e8gles.
+func TestAnalyzeBoundsPastRulesInPrompt(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	if err := e.st.SaveAccount(&Account{Name: "autre", Handle: "autre", Backend: "dryrun"}); err != nil {
+		t.Fatal(err)
+	}
+	perfFixture(t, e, "main")
+	past := func(i int) string {
+		return fmt.Sprintf("R\u00e8gle \u00e9cart\u00e9e fictive %c%c", 'a'+i/10, 'a'+i%10)
+	}
+	var rules []*RuleProposal
+	// 26 r\u00e8gles \u00e9cart\u00e9es pour main ou sans compte, d\u00e9cid\u00e9es \u00e0 des dates
+	// croissantes, mais enregistr\u00e9es dans le d\u00e9sordre ; l'une n'a pas de date
+	// de d\u00e9cision (r\u00e8gle ancienne) : sa date de cr\u00e9ation compte
+	order := []int{3, 0, 25, 7, 1, 12, 2, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
+	for _, i := range order {
+		at := e.now.Add(time.Duration(i-30) * time.Hour)
+		r := &RuleProposal{ID: fmt.Sprintf("r_past%02d", i), Account: "main", Text: past(i), Status: RuleRefused, CreatedAt: at.Add(-time.Hour), DecidedAt: &at}
+		if i%3 == 0 {
+			r.Status, r.Source = RuleRevoked, RuleSourcePerformance
+		}
+		if i%4 == 0 {
+			r.Account = ""
+		}
+		if i == 1 {
+			r.DecidedAt, r.CreatedAt = nil, at
+		}
+		rules = append(rules, r)
+	}
+	// une r\u00e8gle \u00e9cart\u00e9e d'un autre compte, plus r\u00e9cente que toutes : ni envoy\u00e9e,
+	// ni compt\u00e9e dans les 20 de main
+	late := e.now.Add(-time.Minute)
+	rules = append(rules, &RuleProposal{ID: "r_autre", Account: "autre", Text: "R\u00e8gle \u00e9cart\u00e9e d'un autre compte", Status: RuleRefused, CreatedAt: late, DecidedAt: &late})
+	// r\u00e8gles en place et propos\u00e9es : toutes envoy\u00e9es, m\u00eame nombreuses
+	for i := 0; i < 25; i++ {
+		rules = append(rules,
+			&RuleProposal{ID: fmt.Sprintf("r_on%02d", i), Account: "main", Text: fmt.Sprintf("R\u00e8gle en place fictive %c%c", 'a'+i/10, 'a'+i%10), Status: RuleAccepted, CreatedAt: e.now.Add(-100 * time.Hour)},
+			&RuleProposal{ID: fmt.Sprintf("r_wait%02d", i), Text: fmt.Sprintf("R\u00e8gle propos\u00e9e fictive %c%c", 'a'+i/10, 'a'+i%10), Status: RuleProposed, CreatedAt: e.now.Add(-100 * time.Hour)})
+	}
+	e.seedRules(t, rules...)
+	// l'IA repropose les r\u00e8gles \u00e9cart\u00e9es les plus anciennes, absentes du prompt
+	e.ai.perf = func(string) []map[string]any {
+		return []map[string]any{
+			{"text": past(0), "rationale": "oubli\u00e9e", "signals": []string{"type:utile"}},
+			{"text": "R\u00e8gle \u00e9cart\u00e9e d'un autre compte", "rationale": "autre compte", "signals": []string{"type:utile"}},
+		}
+	}
+	if _, err := e.st.AnalyzePerformance(ctx, "main"); err != nil {
+		t.Fatal(err)
+	}
+	msg := e.ai.lastMsg
+	for i := 0; i < 26; i++ {
+		// les 6 plus anciennes (0 \u00e0 5) sont laiss\u00e9es de c\u00f4t\u00e9
+		if in := strings.Contains(msg, past(i)); in != (i >= 26-perfMaxPastRules) {
+			t.Errorf("r\u00e8gle \u00e9cart\u00e9e %d : pr\u00e9sente=%v, attendu %v", i, in, i >= 26-perfMaxPastRules)
+		}
+	}
+	if n := strings.Count(msg, "(refus\u00e9e) ") + strings.Count(msg, "(retir\u00e9e) "); n != perfMaxPastRules {
+		t.Errorf("%d r\u00e8gles \u00e9cart\u00e9es dans la demande, attendu %d", n, perfMaxPastRules)
+	}
+	for i := 0; i < 25; i++ {
+		mustContain(t, "demande d'analyse", msg, fmt.Sprintf("(en place) R\u00e8gle en place fictive %c%c", 'a'+i/10, 'a'+i%10),
+			fmt.Sprintf("(propos\u00e9e) R\u00e8gle propos\u00e9e fictive %c%c", 'a'+i/10, 'a'+i%10))
+	}
+	if strings.Contains(msg, "R\u00e8gle \u00e9cart\u00e9e d'un autre compte") {
+		t.Error("une r\u00e8gle d'un autre compte ne doit pas partir \u00e0 l'IA")
+	}
+	// d\u00e9duplication globale : aucune des deux r\u00e8gles repropos\u00e9es n'est cr\u00e9\u00e9e
+	for _, r := range perfRules(e.st.store.Snapshot()) {
+		if r.Status == RuleProposed && (r.Text == past(0) || r.Text == "R\u00e8gle \u00e9cart\u00e9e d'un autre compte") {
+			t.Errorf("r\u00e8gle \u00e9cart\u00e9e repropos\u00e9e : %+v", r)
+		}
+	}
+
+	// la synth\u00e8se des retours garde son message : toutes les r\u00e8gles, sans limite
+	d := e.st.store.Snapshot()
+	var want strings.Builder
+	want.WriteString("\n<regles_existantes>\n")
+	for _, r := range d.RuleProposals {
+		fmt.Fprintf(&want, "- (%s) %s\n", map[string]string{RuleProposed: "propos\u00e9e", RuleAccepted: "en place", RuleRefused: "refus\u00e9e", RuleRevoked: "retir\u00e9e"}[r.Status], r.Text)
+	}
+	want.WriteString("</regles_existantes>\n")
+	if got := existingRulesBlock(d, "", 0); got != want.String() {
+		t.Fatalf("bloc de la synth\u00e8se modifi\u00e9 :\n%s\nattendu :\n%s", got, want.String())
+	}
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Learnings = append(d.Learnings,
+			Learning{ID: "l_un", Account: "main", Text: "trop de jargon", CreatedAt: e.now},
+			Learning{ID: "l_deux", Account: "main", Text: "plus court", CreatedAt: e.now})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.Synthesize(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if tail := "</retours>\n" + want.String() + "\nPropose les r\u00e8gles (z\u00e9ro si rien ne se d\u00e9gage)."; !strings.HasPrefix(e.ai.lastMsg, "<retours>\n") ||
+		!strings.HasSuffix(e.ai.lastMsg, tail) || strings.Count(e.ai.lastMsg, "<regles_existantes>") != 1 {
+		t.Fatalf("message de la synth\u00e8se :\n%s\nattendu, \u00e0 la fin :\n%s", e.ai.lastMsg, tail)
 	}
 }
 
@@ -480,8 +702,13 @@ func TestAnalyzeProposesRulesWithComputedBasis(t *testing.T) {
 			t.Errorf("règle incomplète : %+v", r)
 		}
 		mustContain(t, "base de "+r.Text, r.Basis, "6,5 % d'engagement médian sur 4 posts", "contre 3,0 % pour l'ensemble du compte")
-		if strings.Contains(r.Basis, "99,9") || strings.Contains(r.Basis, r.Rationale) {
+		if strings.Contains(r.Basis, "99,9") || strings.Contains(r.Basis, "selon l'IA") {
 			t.Errorf("la base ne doit venir que du code : %q", r.Basis)
+		}
+		// la justification chiffrée de l'IA est vidée (LOT1-T7) ; les
+		// propositions par défaut du faux fournisseur gardent la leur
+		if strings.Contains(r.Rationale, "99,9") {
+			t.Errorf("justification chiffrée gardée : %q", r.Rationale)
 		}
 		want := map[string]bool{}
 		for _, k := range r.Signals {
