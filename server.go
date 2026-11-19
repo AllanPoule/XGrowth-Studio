@@ -344,13 +344,15 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			// les dates tenues par le serveur sont des pointeurs partagés avec
 			// d.Settings : sans cette remise à zéro, Unmarshal écrirait la date
 			// envoyée dans la valeur enregistrée elle-même
-			cur.LastSynthesisAt, cur.LastPerfAnalysisAt = nil, nil
+			// (même piège pour la table PerfState : Unmarshal remplirait la
+			// table enregistrée elle-même)
+			cur.LastSynthesisAt, cur.LastPerfAnalysisAt, cur.PerfState = nil, nil, nil
 			// fusion : seuls les champs envoyés changent
 			if err := json.Unmarshal(raw, &cur); err != nil {
 				return err
 			}
 			cur.Onboarded, cur.LastSynthesisAt = d.Settings.Onboarded, d.Settings.LastSynthesisAt
-			cur.LastPerfAnalysisAt = d.Settings.LastPerfAnalysisAt
+			cur.LastPerfAnalysisAt, cur.PerfState = d.Settings.LastPerfAnalysisAt, d.Settings.PerfState
 			if err := NormalizeSettings(&cur); err != nil {
 				return err
 			}

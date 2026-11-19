@@ -205,12 +205,30 @@ type Settings struct {
 	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
 	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
 	// Apprendre des statistiques : analyse hebdomadaire des performances,
-	// désactivée par défaut, et date de la dernière analyse.
+	// désactivée par défaut, et date de la dernière analyse (pour l'affichage ;
+	// elle ne commande le déclenchement que pour un ancien data.json, sans
+	// PerfState).
 	AutoPerfAnalysis   bool       `json:"autoPerfAnalysis"`
 	LastPerfAnalysisAt *time.Time `json:"lastPerfAnalysisAt,omitempty"`
+	// État de l'analyse des performances de chaque compte (clé : nom du
+	// compte en minuscules), tenu par le serveur : un compte ne déclenche ni
+	// ne retarde l'analyse d'un autre.
+	PerfState map[string]PerfAccountState `json:"perfState,omitempty"`
 
 	// Campagnes de réponses : consigne des commentaires (vide = défaut).
 	CommentsPrompt string `json:"commentsPrompt,omitempty"`
+}
+
+// PerfAccountState : suivi de l'analyse des performances d'un compte.
+type PerfAccountState struct {
+	// Dernier passage réussi : appel IA abouti, ou passage sans appel IA
+	// faute de données, de signal ou de place sous le plafond.
+	LastAt time.Time `json:"lastAt,omitzero"`
+	// Échecs consécutifs de l'appel IA, remis à zéro par un passage réussi.
+	Failures int `json:"failures,omitempty"`
+	// Pas de nouvel essai automatique avant cette date (attente croissante
+	// après un échec, voir perfRetryDelay).
+	NextAt time.Time `json:"nextAt,omitzero"`
 }
 
 // Auth protège le studio web : mot de passe (PBKDF2) et sessions (hachées).
