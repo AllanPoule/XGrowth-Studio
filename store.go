@@ -204,6 +204,9 @@ type Settings struct {
 	RulesAutoAccept bool       `json:"rulesAutoAccept"`     // applique d'office les règles proposées
 	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
 	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
+	// Analyse des performances : propose des règles à partir des statistiques.
+	AutoPerfAnalysis   bool       `json:"autoPerfAnalysis"` // analyse hebdomadaire, désactivée par défaut
+	LastPerfAnalysisAt *time.Time `json:"lastPerfAnalysisAt,omitempty"`
 
 	// Campagnes de réponses : consigne des commentaires (vide = défaut).
 	CommentsPrompt string `json:"commentsPrompt,omitempty"`

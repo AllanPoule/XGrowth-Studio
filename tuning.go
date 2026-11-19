@@ -347,7 +347,10 @@ type RuleProposal struct {
 	Account   string     `json:"account,omitempty"` // vide = tous les comptes
 	Text      string     `json:"text"`
 	Rationale string     `json:"rationale,omitempty"`
-	Evidence  []string   `json:"evidence,omitempty"` // identifiants des leçons qui la justifient
+	Evidence  []string   `json:"evidence,omitempty"` // identifiants des leçons (ou, pour une règle de performance, des posts) qui la justifient
+	Source    string     `json:"source,omitempty"`   // vide ou feedback : retours ; performance : statistiques
+	Basis     string     `json:"basis,omitempty"`    // chiffres calculés par le code (jamais par l'IA)
+	Signals   []string   `json:"signals,omitempty"`  // clés de signal citées (règle de performance)
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"createdAt"`
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
@@ -516,6 +519,16 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 			}
 			if t := strings.TrimSpace(text); t != "" {
 				r.Text = t
+			}
+			// Le plafond et la validation du texte ne visent que les règles
+			// de performance : les règles issues des retours gardent leur comportement.
+			if r.Source == RuleSourcePerformance {
+				if err := ruleTextOK(r.Text); err != nil {
+					return err
+				}
+				if acceptedPerfRules(d, r.Account) >= perfMaxAccepted {
+					return fmt.Errorf("%d règles de performance en place pour ce compte au plus : retirez-en une d'abord", perfMaxAccepted)
+				}
 			}
 			r.Status = RuleAccepted
 		case "refuse":

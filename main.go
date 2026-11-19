@@ -64,7 +64,7 @@ func writeEnvelope(e envelope) {
 var boolFlags = map[string]bool{
 	"pretty": true, "now": true, "quote": true, "draft": true, "premium": true, "auto-triage": true,
 	"auto-draft": true, "no-scheduler": true, "help": true, "no-auth": true,
-	"rules-auto-accept": true, "auto-synthesis": true, "automated": true, "ideas-enabled": true,
+	"rules-auto-accept": true, "auto-synthesis": true, "auto-perf-analysis": true, "automated": true, "ideas-enabled": true,
 	"ideas-auto-draft": true, "ignore": true,
 }
 
@@ -785,12 +785,16 @@ func cmdRules(ctx context.Context, st *Studio, a args) {
 		r, err := st.Synthesize(ctx, a.str("account"))
 		check(err)
 		emit(r)
+	case "analyze":
+		r, err := st.AnalyzePerformance(ctx, a.str("account"))
+		check(err)
+		emit(r)
 	case "accept", "refuse", "revoke":
 		r, err := st.DecideRule(need(a, 1, "rules "+a.arg(0)+" <id>"), a.arg(0), a.str("text"))
 		check(err)
 		emit(r)
 	default:
-		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|accept|refuse|revoke"))
+		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|analyze|accept|refuse|revoke"))
 	}
 }
 
@@ -998,6 +1002,9 @@ func cmdSettings(store *Store, a args) {
 		}
 		if a.has("auto-synthesis") {
 			s.AutoSynthesis = a.boolean("auto-synthesis")
+		}
+		if a.has("auto-perf-analysis") {
+			s.AutoPerfAnalysis = a.boolean("auto-perf-analysis")
 		}
 		return NormalizeSettings(s)
 	}))

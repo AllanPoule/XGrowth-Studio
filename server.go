@@ -97,11 +97,15 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 				mix[a.Name] = ComputeTypeMix(d, a.Name, types, time.Now())
 			}
 		}
+		perf := map[string]PerfDigest{}
+		for _, a := range d.Accounts {
+			perf[a.Name] = ComputePerfDigest(d, a.Name)
+		}
 		// Les listes vides partent en [] et jamais en null : l'interface les
 		// parcourt sans test (un studio sans aucun post plantait à l'affichage).
 		reply(w, map[string]any{
 			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
-			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "ideas": orEmpty(d.Ideas),
+			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "perf": perf, "ideas": orEmpty(d.Ideas),
 			"feedbackCategories": FeedbackCategories,
 			"campaigns":          orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
 			"commentsDefault": DefaultCommentsPrompt,
@@ -340,7 +344,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			if err := json.Unmarshal(raw, &cur); err != nil {
 				return err
 			}
-			cur.Onboarded, cur.LastSynthesisAt = d.Settings.Onboarded, d.Settings.LastSynthesisAt
+			cur.Onboarded, cur.LastSynthesisAt, cur.LastPerfAnalysisAt = d.Settings.Onboarded, d.Settings.LastSynthesisAt, d.Settings.LastPerfAnalysisAt
 			if err := NormalizeSettings(&cur); err != nil {
 				return err
 			}
@@ -379,6 +383,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	// ---- règles apprises (synthèse des retours)
 	post("/api/rules/synthesize", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Synthesize(r.Context(), s(b, "account"))
+	})
+	post("/api/rules/analyze", func(r *http.Request, b map[string]any) (any, error) {
+		return st.AnalyzePerformance(r.Context(), s(b, "account"))
 	})
 	post("/api/rules/{id}/{decision}", func(r *http.Request, b map[string]any) (any, error) {
 		return st.DecideRule(r.PathValue("id"), r.PathValue("decision"), s(b, "text"))

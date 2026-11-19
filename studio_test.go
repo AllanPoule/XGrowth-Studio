@@ -17,6 +17,7 @@ type fakeAI struct {
 	lastSys    string
 	lastMsg    string
 	lastSchema map[string]any
+	perf       func(user string) []map[string]any // réponse injectée de l'analyse des performances
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
@@ -47,6 +48,21 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 			{"title": "Idée B", "angle": "angle B", "why": "pourquoi B"},
 			{"title": "Idée C", "angle": "angle C", "why": "pourquoi C"},
 		}}
+	case props["proposals"] != nil:
+		if f.perf != nil {
+			resp = map[string]any{"proposals": f.perf(user)}
+			break
+		}
+		// une règle par clé de signal lue dans la demande (« - [type:utile] … »)
+		var props []map[string]any
+		for _, part := range strings.Split(user, "<signaux>")[1:] {
+			part = part[:strings.Index(part, "</signaux>")]
+			for _, line := range strings.Split(part, "\n- [")[1:] {
+				k := line[:strings.Index(line, "]")]
+				props = append(props, map[string]any{"text": "Privilégie le format " + k, "rationale": "test", "signals": []string{k}})
+			}
+		}
+		resp = map[string]any{"proposals": props}
 	case props["rules"] != nil:
 		// une règle par retour cité (identifiants entre crochets)
 		var rules []map[string]any
