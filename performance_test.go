@@ -829,20 +829,21 @@ func TestPerfAnalysisDueInTick(t *testing.T) {
 		t.Fatalf("second Tick immédiat : %d appel(s) IA, attendu 1", e.ai.calls)
 	}
 
-	// une erreur de l'IA est journalisée sans interrompre le Tick ; la date
-	// ne bouge pas, l'analyse sera retentée. Le message du fournisseur (ici un
+	// une erreur de l'IA est journalisée sans interrompre le Tick ; l'appel a
+	// été tenté, donc la date avance (LOT1-T6) et le journal ne promet pas de
+	// nouvel essai au prochain passage. Le message du fournisseur (ici un
 	// marqueur fictif imitant un corps de réponse HTTP) n'entre pas au journal.
 	const marker = "MARQUEUR-FICTIF-7f3a"
 	bad := &failingAI{msg: "HTTP 400 : {\"post\":\"" + marker + "\",\"compte\":\"@" + marker + "\"}"}
 	e.st.ai = func(Settings) AI { return bad }
 	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
-	before := *e.st.store.Snapshot().Settings.LastPerfAnalysisAt
 	out = e.st.Tick(ctx)
 	if _, ok := out["perf"]; ok || bad.calls != 1 || out["at"] == nil {
 		t.Fatalf("erreur IA : sortie %v, %d appel(s)", out, bad.calls)
 	}
 	d := e.st.store.Snapshot()
-	if l := d.Log[len(d.Log)-1]; l.Level != "error" || !strings.HasPrefix(l.Message, "analyse des performances : ") {
+	if l := d.Log[len(d.Log)-1]; l.Level != "error" || !strings.HasPrefix(l.Message, "analyse des performances : ") ||
+		strings.Contains(l.Message, "prochain passage") {
 		t.Fatalf("journal : %+v", l)
 	}
 	for _, l := range d.Log {
@@ -850,8 +851,308 @@ func TestPerfAnalysisDueInTick(t *testing.T) {
 			t.Fatalf("message du fournisseur IA recopié au journal : %+v", l)
 		}
 	}
-	if !d.Settings.LastPerfAnalysisAt.Equal(before) {
-		t.Fatalf("LastPerfAnalysisAt modifiée malgré l'échec : %v", d.Settings.LastPerfAnalysisAt)
+	if last := d.Settings.LastPerfAnalysisAt; last == nil || !last.Equal(e.now) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v (appel tenté)", last, e.now)
+	}
+}
+
+// ---------------------------------------------------------------- erreurs de l'IA (LOT1-T6)
+
+// Critère 4 de LOT1-T6 : un fournisseur en échec permanent ne fait pas relancer
+// l'analyse à chaque passage du planificateur.
+func TestPerfAnalysisFailingAIOnlyOnceInTick(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	bad := &failingAI{msg: "quota épuisé (fictif)"}
+	e.st.ai = func(Settings) AI { return bad }
+
+	first := e.now
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || bad.calls != 1 {
+		t.Fatalf("premier Tick : %d appel(s) IA, attendu 1 et pas de résultat", bad.calls)
+	}
+	d := e.st.store.Snapshot()
+	if last := d.Settings.LastPerfAnalysisAt; last == nil || !last.Equal(first) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, first)
+	}
+	l := d.Log[len(d.Log)-1]
+	if l.Level != "error" || strings.Contains(l.Message, "prochain passage") || strings.Contains(l.Message, "quota") {
+		t.Fatalf("journal : %+v", l)
+	}
+
+	e.now = e.now.Add(3 * time.Minute)
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || bad.calls != 1 {
+		t.Fatalf("second Tick 3 min plus tard : %d appel(s) IA au total, attendu 1", bad.calls)
+	}
+	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; !last.Equal(first) {
+		t.Fatalf("LastPerfAnalysisAt = %v après le second Tick, attendu %v", last, first)
+	}
+}
+
+// LOT1-T6, relecture 2 : si l'écriture unique de l'analyse automatique échoue,
+// Tick le signale dans le journal du processus par un message fixe, sans
+// recopier l'erreur, et se termine normalement.
+func TestPerfAnalysisSaveErrorLoggedInTick(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	var logged []string
+	e.st.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	// un dossier à la place du fichier temporaire fait échouer toute
+	// écriture de data.json, y compris pour root
+	tmp := e.st.store.path + ".tmp"
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(e.st.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := e.st.Tick(ctx)
+	if _, ok := out["perf"]; ok || out["at"] == nil {
+		t.Fatalf("Tick : sortie %v", out)
+	}
+	if e.ai.calls == 0 {
+		t.Fatal("l'analyse n'a pas été lancée par Tick")
+	}
+	const want = "analyse des performances : échec de l'enregistrement dans data.json"
+	n := 0
+	for _, l := range logged {
+		if l == want {
+			n++
+		}
+		if strings.Contains(l, tmp) || strings.Contains(l, "directory") {
+			t.Fatalf("erreur d'origine recopiée au journal du processus : %q", l)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("journal du processus : %q, attendu une fois %q", logged, want)
+	}
+	if after, err := os.ReadFile(e.st.store.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("data.json modifié malgré l'échec d'écriture (err %v)", err)
+	}
+	// l'API et la CLI reçoivent l'erreur, reconnaissable
+	if _, err := e.st.AnalyzePerformance(ctx, ""); !errors.Is(err, errPerfSave) {
+		t.Fatalf("AnalyzePerformance : erreur %v, attendu errPerfSave", err)
+	}
+}
+
+// Critères 1, 2, 3 et 5 de LOT1-T6 : l'échec de l'IA pour un compte ne perd pas
+// les propositions des autres ; un échec général renvoie une erreur.
+func TestAnalyzeKeepsOtherAccountsOnAIError(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	if err := e.st.SaveAccount(&Account{Name: "second", Handle: "@second", Backend: "dryrun", Timezone: "UTC",
+		Slots: []string{"09:00"}, DailyLimit: 2}); err != nil {
+		t.Fatal(err)
+	}
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "second")
+	const marker = "MARQUEUR-FICTIF-7f3a"
+	failFor := func(accounts ...string) func(string) error {
+		return func(user string) error {
+			for _, a := range accounts {
+				if strings.Contains(user, a+"_") {
+					return errors.New("HTTP 401 : clé invalide " + marker)
+				}
+			}
+			return nil
+		}
+	}
+
+	// « main » (demandé en premier) échoue, « second » reçoit ses propositions
+	e.ai.fail = failFor("main")
+	res, err := e.st.AnalyzePerformance(ctx, "")
+	if err != nil {
+		t.Fatalf("un compte analysé : pas d'erreur attendue, reçu %v", err)
+	}
+	if e.ai.calls != 2 || len(res.Accounts) != 2 {
+		t.Fatalf("%d appel(s) IA pour %d compte(s), attendu 2 pour 2", e.ai.calls, len(res.Accounts))
+	}
+	byName := map[string]*PerfAccountResult{}
+	for _, ar := range res.Accounts {
+		byName[ar.Account] = ar
+	}
+	if m := byName["main"]; m.Error == "" || len(m.Proposed) != 0 || strings.Contains(m.Error, marker) {
+		t.Fatalf("compte en échec : %+v", m)
+	}
+	if s := byName["second"]; s.Error != "" || len(s.Proposed) != 2 {
+		t.Fatalf("compte analysé : %+v", s)
+	}
+	d := e.st.store.Snapshot()
+	stored := perfRules(d)
+	if len(stored) != 2 {
+		t.Fatalf("%d règle(s) enregistrée(s), attendu 2", len(stored))
+	}
+	for _, r := range stored {
+		if r.Account != "second" {
+			t.Fatalf("règle enregistrée pour %q : %+v", r.Account, r)
+		}
+	}
+	if last := d.Settings.LastPerfAnalysisAt; last == nil || !last.Equal(e.now) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, e.now)
+	}
+	errLines := 0
+	for _, l := range d.Log {
+		if strings.Contains(l.Message, marker) || strings.Contains(l.Message, "clé invalide") {
+			t.Fatalf("message du fournisseur au journal : %+v", l)
+		}
+		if l.Level == "error" && strings.HasPrefix(l.Message, "analyse des performances") {
+			errLines++
+		}
+	}
+	if errLines != 1 {
+		t.Fatalf("%d ligne(s) d'erreur au journal, attendu 1", errLines)
+	}
+
+	// tous les appels échouent : erreur pour l'API et la CLI, mais la date
+	// avance quand même (la garde « ne recule pas » reste)
+	e.now = e.now.Add(time.Hour)
+	e.ai.fail = failFor("main", "second")
+	calls := e.ai.calls
+	if res, err := e.st.AnalyzePerformance(ctx, ""); err == nil || res != nil {
+		t.Fatalf("tous les appels en échec : %v, %+v", err, res)
+	}
+	if e.ai.calls != calls+2 {
+		t.Fatalf("%d appel(s) IA, attendu 2 (un par compte)", e.ai.calls-calls)
+	}
+	d = e.st.store.Snapshot()
+	if last := d.Settings.LastPerfAnalysisAt; last == nil || !last.Equal(e.now) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, e.now)
+	}
+	if len(perfRules(d)) != 2 {
+		t.Fatalf("aucune règle ne doit s'ajouter : %d", len(perfRules(d)))
+	}
+	// un seul compte demandé, en échec : erreur aussi
+	if _, err := e.st.AnalyzePerformance(ctx, "second"); err == nil {
+		t.Fatal("compte unique en échec : erreur attendue")
+	}
+
+	// analyse interrompue avant tout appel : aucun appel, date inchangée
+	before := *d.Settings.LastPerfAnalysisAt
+	e.now = e.now.Add(time.Hour)
+	e.ai.fail = nil
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	calls = e.ai.calls
+	if _, err := e.st.AnalyzePerformance(cctx, ""); !errors.Is(err, context.Canceled) || e.ai.calls != calls {
+		t.Fatalf("contexte annulé : %v, %d appel(s)", err, e.ai.calls-calls)
+	}
+	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; !last.Equal(before) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, before)
+	}
+}
+
+// Critère 6 de LOT1-T6 : les publications simulées ne comptent pas parmi les
+// posts publiés depuis la dernière analyse.
+func TestPerfAnalysisDueIgnoresDryRunPosts(t *testing.T) {
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour)) // 5 posts publiés depuis
+	if !perfAnalysisDue(e.st.store.Snapshot(), e.now) {
+		t.Fatal("5 posts réels publiés depuis : due")
+	}
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Posts[0].TweetID = "dry-" + d.Posts[0].ID // un des 5 n'est qu'une simulation
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if perfAnalysisDue(e.st.store.Snapshot(), e.now) {
+		t.Fatal("4 posts réels et 1 simulé publiés depuis : pas due")
+	}
+}
+
+// Correction de LOT1-T6 (relecture 1) : l'échec total de l'analyse automatique
+// est journalisé par l'analyse elle-même, dans sa seule écriture, avec le vrai
+// délai du nouvel essai ; l'analyse manuelle (API, CLI) garde son erreur sans
+// cette ligne.
+func TestPerfAutoAnalysisFailureLog(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	const marker = "MARQUEUR-FICTIF-7f3a"
+	bad := &failingAI{msg: "HTTP 429 : quota épuisé " + marker}
+	e.st.ai = func(Settings) AI { return bad }
+	newLines := func(from int) []LogEntry {
+		d := e.st.store.Snapshot()
+		var out []LogEntry
+		for _, l := range d.Log[from:] {
+			if strings.HasPrefix(l.Message, "analyse des performances") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+
+	// analyse manuelle en échec total : erreur renvoyée, une ligne par
+	// compte, aucune promesse de nouvel essai
+	n := len(e.st.store.Snapshot().Log)
+	if _, err := e.st.AnalyzePerformance(ctx, ""); err == nil || !strings.Contains(err.Error(), "aucun appel IA n'a abouti") {
+		t.Fatalf("analyse manuelle : erreur attendue, reçu %v", err)
+	}
+	if ls := newLines(n); len(ls) != 1 || ls[0].Level != "error" || strings.Contains(ls[0].Message, "nouvel essai") {
+		t.Fatalf("analyse manuelle, journal : %+v", ls)
+	}
+
+	// analyse automatique en échec total : la ligne du compte et celle du
+	// nouvel essai, qui annonce le délai de sept jours et les cinq nouvelles
+	// publications exigés par perfAnalysisDue
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	if !perfAnalysisDue(e.st.store.Snapshot(), e.now) {
+		t.Fatal("fixture : l'analyse automatique doit être due")
+	}
+	n = len(e.st.store.Snapshot().Log)
+	calls := bad.calls
+	if _, ok := e.st.Tick(ctx)["perf"]; ok || bad.calls != calls+1 {
+		t.Fatalf("Tick : %d appel(s) IA, attendu 1 et pas de résultat", bad.calls-calls)
+	}
+	ls := newLines(n)
+	if len(ls) != 2 {
+		t.Fatalf("Tick : %d ligne(s) de journal, attendu 2 : %+v", len(ls), ls)
+	}
+	want := fmt.Sprintf("nouvel essai quand %d jours seront passés et %d nouvelles publications faites",
+		int(perfAutoEvery/(24*time.Hour)), perfAutoMinNewPosts)
+	if l := ls[1]; l.Level != "error" || !strings.HasSuffix(l.Message, want) || !strings.Contains(want, "7 jours") ||
+		!strings.Contains(want, "5 nouvelles publications") {
+		t.Fatalf("Tick, ligne du nouvel essai : %+v", l)
+	}
+	for _, l := range e.st.store.Snapshot().Log {
+		if strings.Contains(l.Message, marker) || strings.Contains(l.Message, "quota") {
+			t.Fatalf("message du fournisseur au journal : %+v", l)
+		}
+	}
+
+	// analyse automatique interrompue avant tout appel : la date ne bouge
+	// pas, l'analyse reste due, le nouvel essai est au prochain passage
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	before := *e.st.store.Snapshot().Settings.LastPerfAnalysisAt
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	n = len(e.st.store.Snapshot().Log)
+	calls = bad.calls
+	if _, err := e.st.analyzePerformance(cctx, "", true); !errors.Is(err, context.Canceled) || bad.calls != calls {
+		t.Fatalf("contexte annulé : %v, %d appel(s)", err, bad.calls-calls)
+	}
+	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; !last.Equal(before) {
+		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, before)
+	}
+	if ls := newLines(n); len(ls) != 2 || !strings.HasSuffix(ls[1].Message, "annulée, nouvel essai au prochain passage") {
+		t.Fatalf("contexte annulé, journal : %+v", ls)
 	}
 }
 

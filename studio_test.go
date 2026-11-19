@@ -20,11 +20,19 @@ type fakeAI struct {
 	// perf : propositions ajoutées à la réponse d'une analyse des performances
 	// (pour tester la validation côté serveur)
 	perf func(user string) []map[string]any
+	// fail : erreur à renvoyer pour une demande (nil = réponse normale) ; le
+	// message reçu permet de viser un compte (identifiants de ses posts)
+	fail func(user string) error
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
 	f.calls++
 	f.lastSys, f.lastMsg, f.lastSchema = system, user, schema
+	if f.fail != nil {
+		if err := f.fail(user); err != nil {
+			return err
+		}
+	}
 	var resp any
 	props := schema["properties"].(map[string]any)
 	switch {
