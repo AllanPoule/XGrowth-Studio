@@ -2953,3 +2953,134 @@ func TestPerfDedupFollowsRulesSeenByAI(t *testing.T) {
 		}
 	}
 }
+
+// C7 : supprimer un compte (API) supprime son état d'analyse ; un compte
+// recréé sous le même nom repart de zéro.
+func TestPerfRemoveAccountAPIClearsAnalysisState(t *testing.T) {
+	srv, e := tuningServer(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	if _, err := e.st.analyzePerformance(context.Background(), "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.st.store.Snapshot().Settings.PerfState["main"]; !ok {
+		t.Fatal("l'état devait exister après l'analyse")
+	}
+	if st, m := call(t, &http.Client{}, "POST", srv.URL+"/api/accounts/main/remove", `{}`); st != 200 {
+		t.Fatalf("suppression refusée : %v", m)
+	}
+	if st, ok := e.st.store.Snapshot().Settings.PerfState["main"]; ok {
+		t.Fatalf("état conservé après suppression du compte : %+v", st)
+	}
+}
+
+// C7 : la CLI et l'API passent par Data.RemoveAccount ; la casse du nom ne
+// change rien, les autres comptes gardent leur état, un compte inconnu est une
+// erreur.
+func TestPerfRemoveAccountIgnoresCaseAndKeepsOtherStates(t *testing.T) {
+	e := newEnv(t)
+	addPerfAccount(t, e, "autre")
+	late := e.now.Add(-time.Hour)
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Settings.PerfState = map[string]PerfAccountState{
+			"main":  {LastAt: late, Failures: 2},
+			"autre": {LastAt: late, Failures: 1},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runCommand(t, func() { cmdAccount(e.st, parseArgs([]string{"remove", "MAIN"})) }); code != 0 {
+		t.Fatalf("account remove : code %d %v", code, out)
+	}
+	d := e.st.store.Snapshot()
+	if _, ok := d.Settings.PerfState["main"]; ok || d.Account("main") != nil {
+		t.Fatalf("compte ou état conservé : %+v", d.Settings.PerfState)
+	}
+	if _, ok := d.Settings.PerfState["autre"]; !ok || d.Account("autre") == nil {
+		t.Fatalf("l'autre compte a perdu son état : %+v", d.Settings.PerfState)
+	}
+	if err := e.st.store.Update(func(d *Data) error { return d.RemoveAccount("main") }); err == nil {
+		t.Fatal("un compte inconnu doit être une erreur")
+	}
+}
+
+// C12 : la synthèse des retours ne journalise que la catégorie fixe de
+// l'erreur, jamais le message du fournisseur (chemin, identifiant de requête).
+func TestPerfSynthesisLogsOnlyTheErrorCategory(t *testing.T) {
+	e := newEnv(t)
+	for _, text := range []string{"un", "deux", "trois"} {
+		p := e.draft(t, text)
+		if _, err := e.st.Reject(p.ID, "trop de jargon"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoSynthesis = true })
+	e.ai.fail = func(string) error {
+		return errors.New("Claude Code : exit status 1 Error: cannot read /home/user/.claude/settings.json (Request-ID: req_SECRET)")
+	}
+	e.st.Tick(context.Background())
+	found := false
+	for _, l := range e.st.store.Snapshot().Log {
+		if strings.Contains(l.Message, "/home/user") || strings.Contains(l.Message, "req_SECRET") {
+			t.Fatalf("le journal garde le message brut du fournisseur : %q", l.Message)
+		}
+		if l.Message == "synthèse des retours : "+perfErrorKind(errors.New("x")) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ligne « synthèse des retours : <catégorie> » attendue : %+v", e.st.store.Snapshot().Log)
+	}
+}
+
+// C7 : un seul compte. Après analyse, suppression puis recréation, le compte
+// recréé n'a ni date ni état : rien ne retombe sur la date globale.
+func TestPerfRemoveSingleAccountResetsGlobalDate(t *testing.T) {
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	// date globale héritée d'un ancien data.json, conservée après l'analyse
+	old := e.now.Add(-30 * 24 * time.Hour)
+	if err := e.st.store.Update(func(d *Data) error { d.Settings.LastPerfAnalysisAt = &old; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.analyzePerformance(context.Background(), "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.store.Update(func(d *Data) error { return d.RemoveAccount("main") }); err != nil {
+		t.Fatal(err)
+	}
+	addPerfAccount(t, e, "main")
+	d := e.st.store.Snapshot()
+	if at := perfLastAt(d.Settings, "main"); at != nil {
+		t.Fatalf("le compte recréé hérite d'une date : %v", at)
+	}
+}
+
+// C7 : ancien data.json (PerfState nil, date globale, deux comptes). Après
+// suppression puis recréation de l'un, le recréé n'a pas de date, l'autre
+// garde la date globale.
+func TestPerfRemoveAccountOnLegacyDataKeepsOtherDate(t *testing.T) {
+	e := newEnv(t)
+	addPerfAccount(t, e, "autre")
+	last := e.now.Add(-48 * time.Hour)
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Settings.PerfState = nil
+		d.Settings.LastPerfAnalysisAt = &last
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.store.Update(func(d *Data) error { return d.RemoveAccount("autre") }); err != nil {
+		t.Fatal(err)
+	}
+	addPerfAccount(t, e, "autre")
+	s := e.st.store.Snapshot().Settings
+	if at := perfLastAt(s, "autre"); at != nil {
+		t.Fatalf("le compte recréé hérite d'une date : %v", at)
+	}
+	if at := perfLastAt(s, "main"); at == nil || !at.Equal(last) {
+		t.Fatalf("l'autre compte a perdu la date globale : %v", at)
+	}
+}

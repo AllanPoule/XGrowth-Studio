@@ -992,7 +992,7 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		if r, err := s.Synthesize(ctx, ""); err == nil {
 			out["synthesis"] = r
 		} else {
-			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
+			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %s", perfErrorKind(err)); return nil })
 		}
 	}
 	if perfAnalysisDue(s.store.Snapshot(), s.now()) {
