@@ -565,13 +565,20 @@ func (d *Data) TopPerformers(account string, max int) []*Post {
 
 // RemoveAccount supprime le compte et son état d'analyse (Settings.PerfState) :
 // un compte recréé sous le même nom repart de zéro, sans hériter de l'ancienne
-// date ni de l'ancien délai d'attente. Le nom se compare sans tenir compte de
-// la casse.
+// date ni de l'ancien délai d'attente. Un ancien data.json n'a pas d'état par
+// compte : avant la suppression, les comptes existants reprennent la date
+// globale (perfSeedState), sinon le compte recréé la retrouverait. S'il ne
+// reste aucun état après la suppression, la date globale est remise à nil.
+// Le nom se compare sans tenir compte de la casse.
 func (d *Data) RemoveAccount(name string) error {
 	for i, a := range d.Accounts {
 		if strings.EqualFold(a.Name, name) {
+			perfSeedState(d)
 			d.Accounts = append(d.Accounts[:i], d.Accounts[i+1:]...)
 			delete(d.Settings.PerfState, perfKey(a.Name))
+			if len(d.Settings.PerfState) == 0 {
+				d.Settings.LastPerfAnalysisAt = nil
+			}
 			return nil
 		}
 	}

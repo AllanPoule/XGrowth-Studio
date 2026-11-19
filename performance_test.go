@@ -3034,3 +3034,53 @@ func TestPerfSynthesisLogsOnlyTheErrorCategory(t *testing.T) {
 		t.Fatalf("ligne « synthèse des retours : <catégorie> » attendue : %+v", e.st.store.Snapshot().Log)
 	}
 }
+
+// C7 : un seul compte. Après analyse, suppression puis recréation, le compte
+// recréé n'a ni date ni état : rien ne retombe sur la date globale.
+func TestPerfRemoveSingleAccountResetsGlobalDate(t *testing.T) {
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	// date globale héritée d'un ancien data.json, conservée après l'analyse
+	old := e.now.Add(-30 * 24 * time.Hour)
+	if err := e.st.store.Update(func(d *Data) error { d.Settings.LastPerfAnalysisAt = &old; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.analyzePerformance(context.Background(), "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.store.Update(func(d *Data) error { return d.RemoveAccount("main") }); err != nil {
+		t.Fatal(err)
+	}
+	addPerfAccount(t, e, "main")
+	d := e.st.store.Snapshot()
+	if at := perfLastAt(d.Settings, "main"); at != nil {
+		t.Fatalf("le compte recréé hérite d'une date : %v", at)
+	}
+}
+
+// C7 : ancien data.json (PerfState nil, date globale, deux comptes). Après
+// suppression puis recréation de l'un, le recréé n'a pas de date, l'autre
+// garde la date globale.
+func TestPerfRemoveAccountOnLegacyDataKeepsOtherDate(t *testing.T) {
+	e := newEnv(t)
+	addPerfAccount(t, e, "autre")
+	last := e.now.Add(-48 * time.Hour)
+	if err := e.st.store.Update(func(d *Data) error {
+		d.Settings.PerfState = nil
+		d.Settings.LastPerfAnalysisAt = &last
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.store.Update(func(d *Data) error { return d.RemoveAccount("autre") }); err != nil {
+		t.Fatal(err)
+	}
+	addPerfAccount(t, e, "autre")
+	s := e.st.store.Snapshot().Settings
+	if at := perfLastAt(s, "autre"); at != nil {
+		t.Fatalf("le compte recréé hérite d'une date : %v", at)
+	}
+	if at := perfLastAt(s, "main"); at == nil || !at.Equal(last) {
+		t.Fatalf("l'autre compte a perdu la date globale : %v", at)
+	}
+}
