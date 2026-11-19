@@ -222,6 +222,7 @@ Chaque commande imprime une enveloppe JSON : `{"ok":true,"schema_version":"1","d
 ./xgrowth posts --status draft --pretty
 ./xgrowth rewrite <id> --feedback "plus court, une seule idée"
 ./xgrowth rules synthesize                        # règles proposées à partir des retours
+./xgrowth rules analyze                           # règles proposées à partir des performances mesurées
 ./xgrowth validate <id> --by Prénom              # prochain créneau libre
 ./xgrowth watch add moncompte --search "agents IA lang:fr -is:retweet"
 ./xgrowth run                                     # planificateur seul (publication, veille, tri, stats)
@@ -277,7 +278,9 @@ identity) are checked again right before sending. It also watches accounts and s
 post, schedules on time slots and tracks performance. The AI can be tuned per account and globally: goals, target
 length, reference posts, post types with target shares, per-request instructions (original ideas, watch items,
 replies, quotes, rewrites, visual ideas), common writing rules, and rules distilled from your feedback that you
-accept, refuse or revoke.
+accept, refuse or revoke. On request, or weekly if you turn it on, the AI also analyzes how your published posts
+performed and proposes writing rules backed by figures the studio computes itself; they always wait for your
+approval.
 
 ```bash
 make build && ./xgrowth serve   # then open http://127.0.0.1:8787 and follow the onboarding
