@@ -2689,14 +2689,27 @@ const perfProviderLeak = "sk-ant-FICTIF-0000 /home/fictif/.config"
 // tous les appels IA échouent, l'API et la CLI ne recopient pas le texte brut
 // du fournisseur dans error.message ; quand l'écriture échoue, pas le chemin
 // de data.json. Échouait sur b6a1c7e : les deux y figuraient.
+//
+// LOT1-T14 : le journal du processus (sortie d'erreur, repris par journald)
+// ne reçoit pas non plus le texte de post, le secret ni le chemin que
+// l'erreur du fournisseur recopie, ni le chemin du fichier de verrou quand il
+// ne peut pas être ouvert. Échouait sur b1969d3 : logf recevait l'erreur
+// brute (%v) aux deux endroits.
 func TestPerfAnalyzeErrorHidesProviderTextAndPath(t *testing.T) {
 	ctx := context.Background()
 	srv, e := tuningServer(t)
-	e.st.logf = func(string, ...any) {}
+	var logged []string
+	var logMu sync.Mutex
+	e.st.logf = func(format string, args ...any) {
+		logMu.Lock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+		logMu.Unlock()
+	}
 	perfFixture(t, e, "main")
+	postText := "Astuce fictive numéro 1" // texte d'un post du jeu fictif
 	e.ai.fail = func(user string) error {
 		if strings.Contains(user, "<signaux>") {
-			return errors.New("Claude Code : exit status 1 " + perfProviderLeak)
+			return errors.New("Claude Code : exit status 1 " + postText + " " + perfProviderLeak)
 		}
 		return nil
 	}
@@ -2717,6 +2730,32 @@ func TestPerfAnalyzeErrorHidesProviderTextAndPath(t *testing.T) {
 	}
 	if strings.Contains(saveMsg, e.st.store.path) {
 		t.Errorf("API : chemin de data.json dans error.message : %s", saveMsg)
+	}
+
+	// le fichier de verrou ne peut pas être ouvert (un dossier à sa place)
+	dir := filepath.Dir(e.st.store.path)
+	lock := filepath.Join(dir, "perf.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if st, m3 := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", `{"account":"main"}`); st == 200 {
+		t.Fatalf("verrou indisponible : erreur attendue, reçu %v", m3)
+	}
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	if len(logged) == 0 {
+		t.Fatal("les échecs doivent rester signalés au journal du processus")
+	}
+	for _, l := range logged {
+		for _, f := range []string{postText, "sk-ant-FICTIF", "/home/fictif", dir, "perf.lock"} {
+			if strings.Contains(l, f) {
+				t.Errorf("journal du processus : %q dans %q", f, l)
+			}
+		}
 	}
 }
 
@@ -2778,16 +2817,19 @@ func TestPerfAnalyzeErrorsCarryOnlyFixedCategory(t *testing.T) {
 	if _, err := e.st.AnalyzePerformance(ctx, "main"); !errors.Is(err, errProvider) {
 		t.Errorf("errors.Is ne reconnaît plus l'erreur du fournisseur : %v", err)
 	}
+	// LOT1-T14 : l'échec reste signalé au journal du processus, avec la
+	// seule catégorie fixe, sans le détail du fournisseur
 	logMu.Lock()
-	detail := 0
+	fixed := 0
 	for _, l := range logged {
-		if strings.Contains(l, "HTTP 401") {
-			detail++
+		if l == "analyse des performances : échec de l'appel IA ("+perfErrorKind(errProvider)+")" {
+			fixed++
 		}
+		clean("journal du processus", l)
 	}
 	logMu.Unlock()
-	if detail == 0 {
-		t.Error("le détail du fournisseur doit aller au journal du processus")
+	if fixed == 0 {
+		t.Errorf("l'échec de l'appel IA doit aller au journal du processus : %q", logged)
 	}
 	for _, l := range e.st.store.Snapshot().Log {
 		if strings.Contains(l.Message, "analyse des performances") {
