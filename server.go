@@ -332,6 +332,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		var out Settings
 		err := st.store.Update(func(d *Data) error {
 			cur := d.Settings
+			// copies des dates : Unmarshal écrit à travers un pointeur déjà
+			// présent, il modifierait la date du magasin elle-même
+			synthAt, perfAt := copyTime(d.Settings.LastSynthesisAt), copyTime(d.Settings.LastPerfAnalysisAt)
 			// une liste envoyée remplace l'ancienne (json fusionnerait ses éléments)
 			for k, f := range map[string]func(){"rules": func() { cur.Rules = nil }, "postTypes": func() { cur.PostTypes = nil },
 				"competitors": func() { cur.Competitors = nil }, "bannedPhrases": func() { cur.BannedPhrases = nil }} {
@@ -344,7 +347,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			if err := json.Unmarshal(raw, &cur); err != nil {
 				return err
 			}
-			cur.Onboarded, cur.LastSynthesisAt, cur.LastPerfAnalysisAt = d.Settings.Onboarded, d.Settings.LastSynthesisAt, d.Settings.LastPerfAnalysisAt
+			cur.Onboarded, cur.LastSynthesisAt, cur.LastPerfAnalysisAt = d.Settings.Onboarded, synthAt, perfAt
 			if err := NormalizeSettings(&cur); err != nil {
 				return err
 			}
@@ -490,4 +493,12 @@ func orEmpty[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+func copyTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	c := *t
+	return &c
 }

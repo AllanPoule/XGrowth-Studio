@@ -683,11 +683,11 @@ function rulesBlock() {
   const rules = S.rules || [], pending = (S.learnings || []).filter(l => !l.synthesizedAt).length;
   const scope = r => r.account ? "@" + esc(handleOf(r.account)) : "Tous";
   const row = r => `<tr><td class="small muted" style="width:90px">${scope(r)}${r.source === "performance" ? `<div><span class="pill">performances</span></div>` : ""}</td>
-    <td>${r.status === "proposed" ? `<input data-rule="${r.id}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}${r.basis ? `<div class="hint">${esc(r.basis)}</div>` : ""}</td>
+    <td>${r.status === "proposed" ? `<input data-rule="${esc(r.id)}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}${r.basis ? `<div class="hint">${esc(r.basis)}</div>` : ""}</td>
     <td style="width:1%;white-space:nowrap"><span class="pill ${RULE_STATUS[r.status][1]}">${RULE_STATUS[r.status][0]}</span>
-      ${r.status === "proposed" ? `<button class="btn sm primary" data-act="rule-accept" data-id="${r.id}">Accepter</button><button class="btn sm ghost" data-act="rule-refuse" data-id="${r.id}">Refuser</button>`
-        : r.status === "accepted" ? `<button class="btn sm ghost" data-act="rule-revoke" data-id="${r.id}">Retirer</button>`
-        : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${r.id}">Remettre</button>` : ""}</td></tr>`;
+      ${r.status === "proposed" ? `<button class="btn sm primary" data-act="rule-accept" data-id="${esc(r.id)}">Accepter</button><button class="btn sm ghost" data-act="rule-refuse" data-id="${esc(r.id)}">Refuser</button>`
+        : r.status === "accepted" ? `<button class="btn sm ghost" data-act="rule-revoke" data-id="${esc(r.id)}">Retirer</button>`
+        : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${esc(r.id)}">Remettre</button>` : ""}</td></tr>`;
   const live = rules.filter(r => r.status === "proposed" || r.status === "accepted"), old = rules.filter(r => r.status === "refused" || r.status === "revoked");
   return `<h3 style="margin-top:22px">Règles apprises</h3>
     <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>

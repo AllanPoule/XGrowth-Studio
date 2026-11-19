@@ -242,7 +242,7 @@ func TestAnalyzeDropsInvalidProposals(t *testing.T) {
 			mk("OUVRE SUR UN EXEMPLE CONCRET", "type:utile"), // déjà refusée, casse différente
 			mk("Ajoute un lien https://exemple.test", "type:utile"),
 			mk("Écris <b>gras</b>", "type:utile"),
-			mk("Cache​ ceci", "type:utile"),
+			mk("Cache\u200b ceci", "type:utile"),
 			mk(strings.Repeat("x", 241), "type:utile"),
 			mk("Mentionne @quelquun", "type:utile"),
 			mk("Deux\nlignes", "type:utile"),
@@ -264,7 +264,7 @@ func TestAnalyzeDropsInvalidProposals(t *testing.T) {
 		t.Fatalf("propositions retenues : %v", got)
 	}
 	// ruleTextOK seul : cas limites
-	if ruleTextOK(strings.Repeat("é", 240)) != nil || ruleTextOK(" ") == nil || ruleTextOK("Texte‮") == nil || ruleTextOK("a\ufeffb") == nil {
+	if ruleTextOK(strings.Repeat("é", 240)) != nil || ruleTextOK(" ") == nil || ruleTextOK("Texte\u202e") == nil || ruleTextOK("a\ufeffb") == nil {
 		t.Fatal("ruleTextOK : cas limites")
 	}
 }
@@ -648,5 +648,310 @@ func TestPerfRequestScopesAndCapsRules(t *testing.T) {
 	res, err := e.st.AnalyzePerformance(context.Background(), "main")
 	if err != nil || len(res.Accounts[0].Proposed) != 1 {
 		t.Fatalf("doublon limité au compte et au global : %v %+v", err, res.Accounts[0])
+	}
+}
+
+// ---------------------------------------------------------------- écarts de la revue comparée
+
+// Un message de fournisseur piégé (texte de post, compte, clé) ne doit jamais
+// atteindre le journal : seule une catégorie fixe y entre.
+func TestTickLogsOnlyAFixedAIErrorCategory(t *testing.T) {
+	const trap = "SECRET-TEXTE-DE-POST @compte_prive sk-cle-secrete"
+	for msg, want := range map[string]string{
+		"API Claude : HTTP 429 : quota dépassé " + trap: "quota dépassé",
+		"réponse de Claude illisible : " + trap:         "réponse invalide",
+		"Claude Code : " + trap:                         "fournisseur indisponible",
+		"connexion refusée " + trap:                     "fournisseur indisponible",
+		"Codex n'a renvoyé aucune réponse " + trap:      "réponse invalide",
+		"limite atteinte, texte du post : " + trap:      "quota dépassé",
+	} {
+		e := newEnv(t)
+		e.seedAnalyzable(t)
+		e.st.store.Update(func(d *Data) error {
+			for _, p := range d.Posts {
+				p.Metrics.UpdatedAt = e.now
+			}
+			d.Settings.AutoPerfAnalysis = true
+			return nil
+		})
+		e.ai.err = func(string) error { return errors.New(msg) }
+		e.st.Tick(context.Background())
+		if e.ai.calls != 1 {
+			t.Fatalf("%q : %d appel(s)", msg, e.ai.calls)
+		}
+		found := false
+		for _, l := range e.st.store.Snapshot().Log {
+			for _, bad := range []string{"SECRET", "compte_prive", "sk-cle", "HTTP", "Claude", "Codex"} {
+				if strings.Contains(l.Message, bad) {
+					t.Fatalf("le journal contient %q : %q", bad, l.Message)
+				}
+			}
+			if l.Level == "error" && strings.Contains(l.Message, "analyse des performances") && strings.HasSuffix(l.Message, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%q : catégorie %q attendue dans le journal : %+v", msg, want, e.st.store.Snapshot().Log)
+		}
+	}
+}
+
+func (e *env) acceptPerfRules(t *testing.T, account string, n int) []string {
+	t.Helper()
+	var ids []string
+	if err := e.st.store.Update(func(d *Data) error {
+		for i := 0; i < n; i++ {
+			id := newID("r")
+			ids = append(ids, id)
+			d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: id, Account: account, Text: "Privilégie " + id, Source: RuleSourcePerformance, Status: RuleAccepted, CreatedAt: e.now})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+func (e *env) proposeRule(t *testing.T, id, account, source string) {
+	t.Helper()
+	if err := e.st.store.Update(func(d *Data) error {
+		d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: id, Account: account, Text: "Règle " + id, Source: source, Status: RuleProposed, CreatedAt: e.now})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Le plafond d'un compte compte ses règles et les règles communes.
+func TestPerfCapCountsCommonRulesForEachAccount(t *testing.T) {
+	e := newEnv(t)
+	e.seedSecondAccount(t)
+	e.acceptPerfRules(t, "main", perfMaxAccepted-2)
+	common := e.acceptPerfRules(t, "", 2)
+	e.proposeRule(t, "r_main", "main", RuleSourcePerformance)
+	if _, err := e.st.DecideRule("r_main", "accept", ""); err == nil {
+		t.Fatal("19+... : 18 règles du compte et 2 communes font 20, la suivante doit être refusée")
+	}
+	if e.st.store.Snapshot().RuleProposal("r_main").Status != RuleProposed {
+		t.Fatal("la 21e règle doit rester proposée")
+	}
+	// le second compte n'a que les 2 règles communes : de la place
+	e.proposeRule(t, "r_second", "second", RuleSourcePerformance)
+	if r, err := e.st.DecideRule("r_second", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("second compte : %v", err)
+	}
+	// retirer une règle commune libère une place pour le premier compte
+	if _, err := e.st.DecideRule(common[0], "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := e.st.DecideRule("r_main", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("après un retrait : %v", err)
+	}
+}
+
+func TestPerfCapRefusesACommonRuleWhenAnyAccountIsFull(t *testing.T) {
+	e := newEnv(t)
+	e.seedSecondAccount(t)
+	own := e.acceptPerfRules(t, "second", perfMaxAccepted)
+	e.proposeRule(t, "r_common", "", RuleSourcePerformance)
+	e.proposeRule(t, "r_common_fb", "", RuleSourceFeedback)
+	if _, err := e.st.DecideRule("r_common", "accept", ""); err == nil {
+		t.Fatal("règle commune : refus attendu, le second compte est au plafond")
+	}
+	if e.st.store.Snapshot().RuleProposal("r_common").Status != RuleProposed {
+		t.Fatal("la règle commune doit rester proposée")
+	}
+	// une règle issue des retours s'accepte toujours, même au plafond
+	if r, err := e.st.DecideRule("r_common_fb", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("règle issue des retours au plafond : %v", err)
+	}
+	e.proposeRule(t, "r_second_fb", "second", "")
+	if r, err := e.st.DecideRule("r_second_fb", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("règle de retours, source vide, au plafond : %v", err)
+	}
+	// la règle commune de retours n'a rien occupé : un retrait suffit
+	if _, err := e.st.DecideRule(own[0], "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := e.st.DecideRule("r_common", "accept", ""); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("après un retrait : %v", err)
+	}
+}
+
+// Un compte au plafond (règles communes comprises) est sauté, sans appel IA.
+func TestAnalyzeSkipsAnAccountAtTheCapWithZeroAICall(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.acceptPerfRules(t, "main", perfMaxAccepted-1)
+	e.acceptPerfRules(t, "", 1)
+	res, err := e.st.AnalyzePerformance(context.Background(), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ai.calls != 0 || res.Accounts[0].Skipped == "" || len(res.Accounts[0].Proposed) != 0 {
+		t.Fatalf("calls=%d bilan=%+v", e.ai.calls, res.Accounts[0])
+	}
+	mustContain(t, "motif", res.Accounts[0].Skipped, "retirez-en une")
+	// un compte sous le plafond reste analysé
+	e.st.store.Update(func(d *Data) error {
+		for _, r := range d.RuleProposals {
+			if r.Account == "" {
+				r.Status = RuleRevoked
+			}
+		}
+		return nil
+	})
+	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil || e.ai.calls != 1 {
+		t.Fatalf("sous le plafond : calls=%d err=%v", e.ai.calls, err)
+	}
+}
+
+func TestAnalyzeCallsAIAtMostOncePerAccountPerRun(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.seedSecondAccount(t)
+	// plusieurs signaux par compte : toujours un seul appel
+	if len(e.digest().Signals) < 1 {
+		t.Fatal("au moins un signal attendu")
+	}
+	res, err := e.st.AnalyzePerformance(context.Background(), "")
+	if err != nil || len(res.Accounts) != 2 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if e.ai.calls != 2 {
+		t.Fatalf("deux comptes, %d appels", e.ai.calls)
+	}
+	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil || e.ai.calls != 3 {
+		t.Fatalf("un compte, un appel de plus : %d", e.ai.calls)
+	}
+}
+
+func TestPerfDigestMatchesAccountNameIgnoringCase(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	want := e.digest()
+	if want.Eligible != 8 {
+		t.Fatalf("éligibles : %d", want.Eligible)
+	}
+	for _, name := range []string{"MAIN", "Main", "mAiN"} {
+		got := ComputePerfDigest(e.st.store.Snapshot(), name)
+		if got.Eligible != want.Eligible || got.Baseline != want.Baseline || len(got.Signals) != len(want.Signals) {
+			t.Fatalf("%q : %+v au lieu de %+v", name, got, want)
+		}
+	}
+	if got := ComputePerfDigest(e.st.store.Snapshot(), "inconnu"); got.Eligible != 0 {
+		t.Fatalf("compte inconnu : %+v", got)
+	}
+}
+
+// Un groupe par dimension (type, genre, longueur, origine), chacun avec son
+// échantillon, sa médiane, celle du compte et le rapport attendus.
+func TestPerfDigestCoversEveryDimension(t *testing.T) {
+	e := newEnv(t)
+	for _, r := range []float64{5, 6, 7} { // médiane 6
+		e.seed(t, pseed{typ: "utile", kind: "reply", text: strings.Repeat("c", 50), source: "item_1", rate: r})
+	}
+	for i := 0; i < 9; i++ { // médiane du compte : 2
+		e.seed(t, pseed{typ: "fil", kind: "post", text: strings.Repeat("a", 200), rate: 2})
+	}
+	dg := e.digest()
+	if dg.Eligible != 12 || dg.Baseline != 2 {
+		t.Fatalf("éligibles=%d baseline=%v", dg.Eligible, dg.Baseline)
+	}
+	got := map[string]PerfSignal{}
+	for _, s := range dg.Signals {
+		got[s.Key] = s
+	}
+	if len(got) != 4 {
+		t.Fatalf("4 signaux attendus : %+v", dg.Signals)
+	}
+	for _, k := range []string{"type:utile", "kind:reply", "len:court", "source:veille"} {
+		s, ok := got[k]
+		if !ok || s.N != 3 || s.Median != 6 || s.Baseline != 2 || s.Ratio != 3 || len(s.PostIDs) != 3 {
+			t.Fatalf("signal %s : %+v", k, s)
+		}
+	}
+	// les groupes du reste du compte (écart nul) ne sont pas des signaux
+	for _, k := range []string{"type:fil", "kind:post", "len:moyen", "source:idee"} {
+		if _, ok := got[k]; ok {
+			t.Fatalf("%s ne doit pas être un signal", k)
+		}
+	}
+}
+
+// La date de la dernière analyse avance, ne recule pas, et l'interface ne
+// l'efface pas en enregistrant les réglages.
+func TestLastPerfAnalysisAtStaysTheLatestAndSurvivesSettingsSave(t *testing.T) {
+	srv, e := tuningServer(t)
+	e.seedAnalyzable(t)
+	ctx := context.Background()
+	first := e.now
+	if _, err := e.st.AnalyzePerformance(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if at := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; at == nil || !at.Equal(first) {
+		t.Fatalf("après la première analyse : %v", at)
+	}
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	later := e.now
+	if _, err := e.st.AnalyzePerformance(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if at := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; at == nil || !at.Equal(later) {
+		t.Fatalf("la date doit être la plus récente : %v", at)
+	}
+	c := &http.Client{}
+	for _, body := range []string{
+		`{"autoPerfAnalysis":true}`,
+		`{"autoPerfAnalysis":false,"rulesAutoAccept":true}`,
+		`{"lastPerfAnalysisAt":null}`,
+		`{"lastPerfAnalysisAt":"2020-01-01T00:00:00Z","autoPerfAnalysis":true}`,
+	} {
+		if st, m := call(t, c, "POST", srv.URL+"/api/settings", body); st != 200 {
+			t.Fatalf("%s : %v", body, m)
+		}
+		if at := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; at == nil || !at.Equal(later) {
+			t.Fatalf("%s a modifié la date : %v", body, at)
+		}
+	}
+	if !e.st.store.Snapshot().Settings.AutoPerfAnalysis {
+		t.Fatal("le réglage envoyé doit être enregistré")
+	}
+}
+
+func TestPerfRuleTextOKRefusals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		text string
+		want string // fragment du motif ; vide = accepté
+	}{
+		"valide":              {"Privilégie les exemples concrets.", ""},
+		"accents":             {"Ouvre sur une question, puis réponds-y.", ""},
+		"vide":                {"   ", "vide"},
+		"url http":            {"Voir http://exemple.test", "lien"},
+		"url https":           {"Voir HTTPS://exemple.test", "lien"},
+		"balise ouvrante":     {"Ajoute <b>du gras", "balise"},
+		"balise fermante":     {"Ferme />", "balise"},
+		"mention":             {"Cite @quelquun", "mention"},
+		"retour ligne":        {"Une ligne\nUne autre", "une ligne"},
+		"zero width space":    {"Privilégie\u200bles exemples", "invisible"},
+		"bidi override":       {"Privilégie\u202ees exemples", "invisible"},
+		"bom":                 {"\ufeffPrivilégie les exemples", "invisible"},
+		"tag char":            {"Privilégie\U000E0041 les exemples", "invisible"},
+		"longueur limite":     {strings.Repeat("é", perfMaxRuleChars), ""},
+		"trop longue":         {strings.Repeat("é", perfMaxRuleChars+1), "trop longue"},
+		"chiffre":             {"Écris 3 lignes", "chiffre"},
+		"chiffre en lettre":   {"Écris trois lignes", ""},
+		"chiffre arabe":       {"Écris \u0663 lignes", "chiffre"},
+		"chiffre pleine larg": {"Écris \uff13 lignes", "chiffre"},
+	} {
+		err := perfRuleTextOK(tc.text)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s : refus inattendu : %v", name, err)
+		case tc.want != "" && err == nil:
+			t.Errorf("%s : %q aurait dû être refusé", name, tc.text)
+		case tc.want != "" && !strings.Contains(err.Error(), tc.want):
+			t.Errorf("%s : motif %q, attendu %q", name, err, tc.want)
+		}
 	}
 }

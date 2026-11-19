@@ -441,14 +441,49 @@ func ruleInScope(r *RuleProposal, account string) bool {
 	return r.Account == "" || strings.EqualFold(r.Account, account)
 }
 
+// acceptedPerfRules : règles de performance en place qui comptent dans le
+// plafond d'un compte, les siennes et les règles communes (sans compte), qui
+// valent pour tous les comptes.
 func acceptedPerfRules(d *Data, account string) int {
 	n := 0
 	for _, r := range d.RuleProposals {
-		if r.Source == RuleSourcePerformance && r.Status == RuleAccepted && strings.EqualFold(r.Account, account) {
+		if r.Source == RuleSourcePerformance && r.Status == RuleAccepted && ruleInScope(r, account) {
 			n++
 		}
 	}
 	return n
+}
+
+// perfCapReached : accepter cette règle de performance dépasserait le plafond.
+// Une règle de compte compte pour ce compte ; une règle commune compte pour
+// tous, donc un seul compte au plafond la refuse.
+func perfCapReached(d *Data, r *RuleProposal) bool {
+	if r.Account != "" {
+		return acceptedPerfRules(d, r.Account) >= perfMaxAccepted
+	}
+	if len(d.Accounts) == 0 {
+		return acceptedPerfRules(d, "") >= perfMaxAccepted
+	}
+	for _, a := range d.Accounts {
+		if acceptedPerfRules(d, a.Name) >= perfMaxAccepted {
+			return true
+		}
+	}
+	return false
+}
+
+// aiErrorCategory : catégorie fixe d'une erreur du fournisseur IA, la seule
+// chose que le journal garde. Le message brut peut citer un texte de post, un
+// compte ou une clé : il ne sort jamais d'ici.
+func aiErrorCategory(err error) string {
+	m := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(m, "quota"), strings.Contains(m, "rate limit"), strings.Contains(m, "429"), strings.Contains(m, "limite"):
+		return "quota dépassé"
+	case strings.Contains(m, "illisible"), strings.Contains(m, "tronquée"), strings.Contains(m, "décliné"), strings.Contains(m, "sortie inattendue"), strings.Contains(m, "aucune réponse"):
+		return "réponse invalide"
+	}
+	return "fournisseur indisponible"
 }
 
 // perfRequest : uniquement des données du propriétaire et des chiffres. Ni le

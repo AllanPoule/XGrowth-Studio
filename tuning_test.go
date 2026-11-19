@@ -470,3 +470,25 @@ func TestCLIPostTypesFlag(t *testing.T) {
 		t.Fatalf("options : %+v %+v", a.flags, p)
 	}
 }
+
+// Les règles tirées des retours gardent la source « feedback » : elles ne
+// comptent pas dans le plafond des règles de performance.
+func TestSynthesisKeepsFeedbackSource(t *testing.T) {
+	e := newEnv(t)
+	p1, p2 := e.draft(t, "un"), e.draft(t, "deux")
+	if _, err := e.st.Reject(p1.ID, "trop de jargon"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.RewritePost(context.Background(), p2.ID, "plus court"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.st.Synthesize(context.Background(), "")
+	if err != nil || len(res.Proposed) == 0 {
+		t.Fatalf("synthèse : %v %+v", err, res)
+	}
+	for _, r := range e.st.store.Snapshot().RuleProposals {
+		if r.Source != RuleSourceFeedback {
+			t.Fatalf("règle %q : source %q au lieu de %q", r.Text, r.Source, RuleSourceFeedback)
+		}
+	}
+}

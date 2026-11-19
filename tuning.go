@@ -468,7 +468,7 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 				continue
 			}
 			existing[strings.ToLower(text)] = true
-			r := &RuleProposal{ID: newID("r"), Text: text, Rationale: strings.TrimSpace(o.Rationale), Status: RuleProposed, CreatedAt: now}
+			r := &RuleProposal{ID: newID("r"), Text: text, Rationale: strings.TrimSpace(o.Rationale), Source: RuleSourceFeedback, Status: RuleProposed, CreatedAt: now}
 			// la règle vaut pour un compte quand tous ses retours le concernent
 			accounts := map[string]bool{}
 			for _, id := range o.Evidence {
@@ -528,8 +528,8 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 				if err := perfRuleTextOK(r.Text); err != nil {
 					return err
 				}
-				if acceptedPerfRules(d, r.Account) >= perfMaxAccepted {
-					return fmt.Errorf("%d règles de performance en place pour ce compte au plus : retirez-en une d'abord", perfMaxAccepted)
+				if perfCapReached(d, r) {
+					return fmt.Errorf("%d règles de performance en place au plus, règles communes comprises : retirez-en une d'abord", perfMaxAccepted)
 				}
 			}
 			r.Status = RuleAccepted
