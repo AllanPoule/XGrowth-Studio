@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,7 +439,7 @@ func TestMigrationRestoresItemsIgnoredByAI(t *testing.T) {
 		t.Fatalf("un contenu jamais trié doit rester à trier par l'IA : %+v", c)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "data.json"))
-	if !strings.Contains(string(raw), `"version": 2`) {
+	if !strings.Contains(string(raw), fmt.Sprintf(`"version": %d`, dataVersion)) {
 		t.Fatal("la migration doit être écrite sur disque")
 	}
 }

@@ -988,10 +988,21 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
 		}
 	}
-	if perfAnalysisDue(s.store.Snapshot(), s.now()) {
-		if r, err := s.AnalyzePerformance(ctx, ""); err == nil {
-			out["perf"] = r
-		} else {
+	if due := perfDueAccounts(s.store.Snapshot(), s.now()); len(due) > 0 {
+		r, err := s.analyzeAccounts(ctx, due)
+		var pe *perfError
+		switch {
+		case err == nil:
+			// rien à montrer quand aucun compte n'a eu de quoi appeler l'IA
+			for _, a := range r.Accounts {
+				if a.Skipped == "" {
+					out["perf"] = r
+					break
+				}
+			}
+		case errors.Is(err, errPerfBusy), errors.As(err, &pe):
+			// analyse déjà en cours, ou échec déjà journalisé compte par compte
+		default:
 			_ = s.store.Update(func(d *Data) error {
 				d.AddLog("error", "analyse des performances : %s", aiErrorCategory(err))
 				return nil

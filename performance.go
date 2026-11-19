@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -47,9 +48,14 @@ const (
 	perfMaxAccepted = 20
 	// Une règle tient en une phrase.
 	perfMaxRuleChars = 240
-	// Analyse planifiée : au moins 7 jours et 5 nouveaux posts publiés.
+	// Analyse planifiée, compte par compte : au moins 7 jours depuis son dernier
+	// succès et 5 de ses posts devenus éligibles depuis.
 	perfEvery      = 7 * 24 * time.Hour
 	perfMinNewPost = 5
+	// Reprise après une erreur passagère : au premier Tick qui suit 6 h après la
+	// dernière tentative, 3 reprises au plus ; ensuite, rythme normal.
+	perfRetryAfter = 6 * time.Hour
+	perfMaxRetries = 3
 	// Taille des listes de posts cités à l'analyse et en preuve d'une règle.
 	perfTopN     = 3
 	perfMaxProof = 10
@@ -206,7 +212,8 @@ func (s PerfSignal) Basis() string {
 // ---------------------------------------------------------------- validation du texte d'une règle
 
 // Caractères invisibles ou de direction du texte, utilisés pour cacher une
-// instruction dans une règle injectée à chaque demande.
+// instruction dans une règle injectée à chaque demande (les catégories Unicode
+// Cc, Cf, Zl et Zp, vérifiées en plus dans ruleTextOK, couvrent le reste).
 // adapté de hermes-agent tools/threat_patterns.py (INVISIBLE_CHARS)
 func invisibleRune(r rune) bool {
 	switch {
@@ -218,26 +225,28 @@ func invisibleRune(r rune) bool {
 }
 
 // ruleTextOK : une règle apprise est une phrase de texte brut. Elle entre dans
-// chaque demande à l'IA, donc ni balise, ni lien, ni mention, ni caractère caché.
+// chaque demande à l'IA, donc ni balise, ni lien, ni mention, ni caractère caché
+// ou de contrôle (tabulation, NUL, échappement, séparateurs de ligne Unicode…).
 func ruleTextOK(text string) error {
 	t := strings.TrimSpace(text)
+	low := strings.ToLower(t)
 	switch {
 	case t == "":
 		return errors.New("règle vide")
 	case utf8.RuneCountInString(t) > perfMaxRuleChars:
 		return fmt.Errorf("règle trop longue (%d caractères au plus)", perfMaxRuleChars)
-	case strings.ContainsAny(t, "\r\n"):
+	case strings.ContainsAny(t, "\r\n\u0085\u2028\u2029"):
 		return errors.New("une règle tient en une ligne")
-	case strings.ContainsAny(t, "<>"):
+	case strings.ContainsAny(t, "<>＜＞"):
 		return errors.New("balise interdite dans une règle")
-	case strings.Contains(strings.ToLower(t), "http://"), strings.Contains(strings.ToLower(t), "https://"):
+	case strings.Contains(low, "http://"), strings.Contains(low, "https://"), strings.Contains(low, "www."):
 		return errors.New("lien interdit dans une règle")
-	case strings.Contains(t, "@"):
+	case strings.ContainsAny(t, "@＠"):
 		return errors.New("mention interdite dans une règle")
 	}
 	for _, r := range t {
-		if invisibleRune(r) {
-			return errors.New("caractère invisible dans une règle")
+		if invisibleRune(r) || unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return errors.New("caractère invisible ou de contrôle dans une règle")
 		}
 	}
 	return nil
@@ -310,6 +319,37 @@ func ruleStatusLabel(status string) string {
 	return map[string]string{RuleProposed: "proposée", RuleAccepted: "en place", RuleRefused: "refusée", RuleRevoked: "retirée"}[status]
 }
 
+var (
+	// perfBusy : une seule analyse à la fois dans le processus (clic manuel,
+	// Tick, CLI de serve) ; une seconde demande n'appelle pas l'IA.
+	perfBusy    sync.Mutex
+	errPerfBusy = errors.New("analyse déjà en cours")
+)
+
+// perfAIError : erreur du fournisseur IA, à distinguer d'une erreur du magasin
+// pour la classer (aiErrorCategory).
+type perfAIError struct{ err error }
+
+func (e *perfAIError) Error() string { return e.err.Error() }
+func (e *perfAIError) Unwrap() error { return e.err }
+
+// perfError : tous les appels IA de l'analyse ont échoué. Le message ne porte
+// que la catégorie ; chaque compte a déjà laissé sa ligne de journal.
+type perfError struct{ kind string }
+
+func (e *perfError) Error() string { return "analyse des performances : " + e.kind }
+
+// PerfState : état de l'analyse d'un compte. Un compte n'est jamais déclenché,
+// ni retardé, par l'activité d'un autre.
+type PerfState struct {
+	LastSuccessAt *time.Time `json:"lastSuccessAt,omitempty"`
+	LastAttemptAt *time.Time `json:"lastAttemptAt,omitempty"`
+	Failures      int        `json:"failures,omitempty"`      // échecs consécutifs
+	LastErrorKind string     `json:"lastErrorKind,omitempty"` // catégorie fixe (aiErrorCategory)
+}
+
+func perfKey(account string) string { return strings.ToLower(account) }
+
 // AnalyzePerformance propose des règles à partir des statistiques d'un compte
 // (ou de tous). Au plus un appel IA par compte, aucun si les données manquent.
 // Les règles créées sont toujours « proposées » : Settings.RulesAutoAccept ne
@@ -328,19 +368,24 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 			names = append(names, a.Name)
 		}
 	}
-	res := &PerfResult{Accounts: make([]PerfAccountResult, 0, len(names))} // capacité fixe : les pointeurs vers ses éléments restent valides
-	type pending struct {
-		r   *PerfAccountResult
-		dg  PerfDigest
-		out perfOut
+	return s.analyzeAccounts(ctx, names)
+}
+
+// analyzeAccounts analyse les comptes donnés, un par un : chaque compte terminé,
+// succès ou échec, est écrit tout de suite (un Update par compte), sans toucher
+// à l'état des autres.
+func (s *Studio) analyzeAccounts(ctx context.Context, names []string) (*PerfResult, error) {
+	if !perfBusy.TryLock() {
+		return nil, errPerfBusy
 	}
-	var todo []*pending
-	attempted, failed := 0, 0
+	defer perfBusy.Unlock()
+	res := &PerfResult{Accounts: make([]PerfAccountResult, 0, len(names))}
+	attempted, failed, kind := 0, 0, ""
 	for _, name := range names {
+		d := s.store.Snapshot() // à jour : les comptes précédents ont écrit
 		dg := ComputePerfDigest(d, name)
-		r := &PerfAccountResult{Account: name, Eligible: dg.Eligible, Proposed: []*RuleProposal{}}
-		res.Accounts = append(res.Accounts, *r)
-		r = &res.Accounts[len(res.Accounts)-1]
+		res.Accounts = append(res.Accounts, PerfAccountResult{Account: name, Eligible: dg.Eligible, Proposed: []*RuleProposal{}})
+		r := &res.Accounts[len(res.Accounts)-1]
 		switch {
 		case dg.Eligible < perfMinEligible:
 			r.Skipped = fmt.Sprintf("pas assez de posts mesurés : %d sur %d", dg.Eligible, perfMinEligible)
@@ -354,86 +399,101 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 		}
 		var out perfOut
 		attempted++
-		if err := s.aiFor(d.Account(name)).JSON(ctx, perfSystem, perfRequest(d, name, dg), perfSchema, &out); err != nil {
-			// on continue avec les autres comptes ; le compte en échec sera
-			// réessayé à la prochaine analyse
-			r.Error = err.Error()
+		aiErr := s.aiFor(d.Account(name)).JSON(ctx, perfSystem, perfRequest(d, name, dg), perfSchema, &out)
+		now := s.now().UTC()
+		var uerr error
+		if aiErr != nil {
+			// on continue avec les autres comptes ; la reprise dépend de la catégorie
+			r.Error = aiErrorCategory(&perfAIError{aiErr})
 			failed++
+			kind = r.Error
+			uerr = s.store.Update(func(d *Data) error {
+				st := d.perfState(name)
+				at := now
+				st.LastAttemptAt, st.LastErrorKind = &at, r.Error
+				st.Failures++
+				d.AddLog("error", "analyse des performances : %s", r.Error)
+				return nil
+			})
+		} else {
+			uerr = s.store.Update(func(d *Data) error { return perfRecordSuccess(d, r, dg, out, now) })
+		}
+		if uerr != nil {
+			r.Proposed = []*RuleProposal{}
+			return res, uerr
+		}
+	}
+	if attempted > 0 && failed == attempted {
+		return res, &perfError{kind: kind}
+	}
+	return res, nil
+}
+
+// perfRecordSuccess écrit les propositions d'un compte et son succès. Plafond et
+// doublons sont revérifiés sur l'état à jour : une acceptation ou une autre
+// analyse a pu avoir lieu pendant l'appel IA.
+func perfRecordSuccess(d *Data, r *PerfAccountResult, dg PerfDigest, out perfOut, now time.Time) error {
+	st := d.perfState(r.Account)
+	at, ok := now, now
+	st.LastAttemptAt, st.LastSuccessAt, st.Failures, st.LastErrorKind = &at, &ok, 0, ""
+	if acceptedPerfRules(d, r.Account) >= perfMaxAccepted {
+		r.Skipped = fmt.Sprintf("%d règles de performance déjà en place : retirez-en une d'abord", perfMaxAccepted)
+		return nil
+	}
+	// doublons : règles communes et règles de ce compte seulement
+	existing := map[string]bool{}
+	for _, x := range d.Settings.Rules {
+		existing[strings.ToLower(strings.TrimSpace(x))] = true
+	}
+	for _, x := range d.RuleProposals {
+		if ruleInScope(x, r.Account) {
+			existing[strings.ToLower(strings.TrimSpace(x.Text))] = true
+		}
+	}
+	bySig := map[string]PerfSignal{}
+	for _, sg := range dg.Signals {
+		bySig[sg.Key] = sg
+	}
+	for _, o := range out.Proposals {
+		if len(r.Proposed) >= perfMaxProposals {
+			break
+		}
+		text := strings.TrimSpace(o.Text)
+		if perfRuleTextOK(text) != nil || existing[strings.ToLower(text)] {
 			continue
 		}
-		todo = append(todo, &pending{r: r, dg: dg, out: out})
-	}
-
-	now := s.now().UTC()
-	err := s.store.Update(func(d *Data) error {
-		for _, p := range todo {
-			// doublons : règles communes et règles de ce compte seulement
-			existing := map[string]bool{}
-			for _, r := range d.Settings.Rules {
-				existing[strings.ToLower(strings.TrimSpace(r))] = true
+		var keys, evidence, basis []string
+		seen := map[string]bool{}
+		for _, k := range o.Signals {
+			sg, ok := bySig[k]
+			if !ok || seen[k] {
+				continue
 			}
-			for _, r := range d.RuleProposals {
-				if ruleInScope(r, p.r.Account) {
-					existing[strings.ToLower(strings.TrimSpace(r.Text))] = true
-				}
-			}
-			bySig := map[string]PerfSignal{}
-			for _, sg := range p.dg.Signals {
-				bySig[sg.Key] = sg
-			}
-			for _, o := range p.out.Proposals {
-				if len(p.r.Proposed) >= perfMaxProposals {
-					break
-				}
-				text := strings.TrimSpace(o.Text)
-				if perfRuleTextOK(text) != nil || existing[strings.ToLower(text)] {
-					continue
-				}
-				var keys, evidence, basis []string
-				seen := map[string]bool{}
-				for _, k := range o.Signals {
-					sg, ok := bySig[k]
-					if !ok || seen[k] {
-						continue
-					}
-					seen[k] = true
-					keys = append(keys, k)
-					basis = append(basis, sg.Basis())
-					evidence = append(evidence, sg.PostIDs...)
-				}
-				if len(keys) == 0 {
-					continue
-				}
-				if len(evidence) > perfMaxProof {
-					evidence = evidence[:perfMaxProof]
-				}
-				existing[strings.ToLower(text)] = true
-				rationale := strings.TrimSpace(o.Rationale)
-				if perfRuleTextOK(rationale) != nil {
-					rationale = "" // justification invalide (chiffre, lien, balise…) : la base chiffrée du code suffit
-				}
-				r := &RuleProposal{ID: newID("r"), Account: p.r.Account, Text: text, Rationale: rationale,
-					Source: RuleSourcePerformance, Signals: keys, Evidence: evidence, Basis: strings.Join(basis, " ; "),
-					Status: RuleProposed, CreatedAt: now}
-				d.RuleProposals = append(d.RuleProposals, r)
-				p.r.Proposed = append(p.r.Proposed, r)
-			}
-			// comptes seulement : jamais de texte de post ni d'identifiant de compte X
-			d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), %d règle(s) proposée(s)", p.dg.Eligible, len(p.r.Proposed))
+			seen[k] = true
+			keys = append(keys, k)
+			basis = append(basis, sg.Basis())
+			evidence = append(evidence, sg.PostIDs...)
 		}
-		d.Settings.LastPerfAnalysisAt = &now
-		return nil
-	})
-	if err == nil && attempted > 0 && failed == attempted {
-		err = errors.New("l'analyse des performances a échoué pour tous les comptes")
-		for _, a := range res.Accounts {
-			if a.Error != "" {
-				err = fmt.Errorf("analyse des performances : %s", a.Error)
-				break
-			}
+		if len(keys) == 0 {
+			continue
 		}
+		if len(evidence) > perfMaxProof {
+			evidence = evidence[:perfMaxProof]
+		}
+		existing[strings.ToLower(text)] = true
+		rationale := strings.TrimSpace(o.Rationale)
+		if perfRuleTextOK(rationale) != nil {
+			rationale = "" // justification invalide (chiffre, lien, balise…) : la base chiffrée du code suffit
+		}
+		p := &RuleProposal{ID: newID("r"), Account: r.Account, Text: text, Rationale: rationale,
+			Source: RuleSourcePerformance, Signals: keys, Evidence: evidence, Basis: strings.Join(basis, " ; "),
+			Status: RuleProposed, CreatedAt: now}
+		d.RuleProposals = append(d.RuleProposals, p)
+		r.Proposed = append(r.Proposed, p)
 	}
-	return res, err
+	// comptes seulement : jamais de texte de post ni d'identifiant de compte X
+	d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), %d règle(s) proposée(s)", dg.Eligible, len(r.Proposed))
+	return nil
 }
 
 // ruleInScope : règle du compte analysé, ou règle commune (compte vide).
@@ -472,18 +532,47 @@ func perfCapReached(d *Data, r *RuleProposal) bool {
 	return false
 }
 
-// aiErrorCategory : catégorie fixe d'une erreur du fournisseur IA, la seule
-// chose que le journal garde. Le message brut peut citer un texte de post, un
-// compte ou une clé : il ne sort jamais d'ici.
+// aiErrorCategory : catégorie fixe d'une erreur, la seule chose que le journal,
+// l'API et la CLI gardent. Le message brut peut citer un texte de post, un
+// compte ou une clé : il ne sort jamais d'ici. Une erreur qui n'est pas celle du
+// fournisseur (magasin : disque plein, data.json illisible) est un « stockage ».
 func aiErrorCategory(err error) string {
-	m := strings.ToLower(err.Error())
+	var pe *perfAIError
+	if !errors.As(err, &pe) {
+		return "stockage"
+	}
+	m := strings.ToLower(pe.err.Error())
+	has := func(subs ...string) bool {
+		for _, x := range subs {
+			if strings.Contains(m, x) {
+				return true
+			}
+		}
+		return false
+	}
 	switch {
-	case strings.Contains(m, "quota"), strings.Contains(m, "rate limit"), strings.Contains(m, "429"), strings.Contains(m, "limite"):
+	case has("401", "403", "unauthorized", "forbidden", "x-api-key", "api key", "clé api", "clé d'api", "authentication", "not logged in", "/login"):
+		return "authentification"
+	case has("quota", "rate limit", "429", "limite"):
 		return "quota dépassé"
-	case strings.Contains(m, "illisible"), strings.Contains(m, "tronquée"), strings.Contains(m, "décliné"), strings.Contains(m, "sortie inattendue"), strings.Contains(m, "aucune réponse"):
+	case has("délai", "deadline", "timeout", "timed out", "n'a pas répondu"):
+		return "délai dépassé"
+	case has("connexion", "connection", "dial ", "no such host"):
+		return "connexion"
+	case has("illisible", "tronquée", "décliné", "sortie inattendue", "aucune réponse"):
 		return "réponse invalide"
 	}
 	return "fournisseur indisponible"
+}
+
+// perfTransient : une nouvelle tentative peut réussir sans rien changer. Une clé
+// invalide ou une réponse invalide reviendront à l'identique.
+func perfTransient(kind string) bool {
+	switch kind {
+	case "quota dépassé", "fournisseur indisponible", "délai dépassé", "connexion":
+		return true
+	}
+	return false
 }
 
 // perfRequest : uniquement des données du propriétaire et des chiffres. Ni le
@@ -547,21 +636,47 @@ func perfRequest(d *Data, account string, dg PerfDigest) string {
 	return u.String()
 }
 
-// perfAnalysisDue : analyse hebdomadaire activée, dernière il y a 7 jours ou
-// plus, et au moins 5 posts publiés depuis.
-func perfAnalysisDue(d *Data, now time.Time) bool {
-	if !d.Settings.AutoPerfAnalysis {
-		return false
-	}
-	last := d.Settings.LastPerfAnalysisAt
-	if last != nil && now.Sub(*last) < perfEvery {
-		return false
-	}
+// perfNewEligible : posts du compte devenus éligibles au résumé (mesurés, 48 h,
+// 50 vues) depuis since. Un post devient éligible 48 h après sa publication.
+func perfNewEligible(d *Data, account string, since *time.Time) int {
 	n := 0
 	for _, p := range d.Posts {
-		if p.Status == StatusPublished && p.PublishedAt != nil && !strings.HasPrefix(p.TweetID, "dry-") && (last == nil || p.PublishedAt.After(*last)) {
+		if strings.EqualFold(p.Account, account) && perfEligible(p) && (since == nil || p.PublishedAt.Add(perfMinAge).After(*since)) {
 			n++
 		}
 	}
-	return n >= perfMinNewPost
+	return n
+}
+
+// perfAccountDue : analyse hebdomadaire activée, au moins 7 jours depuis le
+// dernier succès du compte ET depuis sa dernière tentative, et 5 de ses posts
+// devenus éligibles depuis ce succès. Après une erreur passagère, reprise au
+// premier Tick qui suit 6 h après la dernière tentative, 3 reprises au plus.
+func perfAccountDue(d *Data, account string, now time.Time) bool {
+	if !d.Settings.AutoPerfAnalysis {
+		return false
+	}
+	var st PerfState
+	if p := d.PerfStates[perfKey(account)]; p != nil {
+		st = *p
+	}
+	if perfNewEligible(d, account, st.LastSuccessAt) < perfMinNewPost {
+		return false
+	}
+	weekly := (st.LastSuccessAt == nil || now.Sub(*st.LastSuccessAt) >= perfEvery) &&
+		(st.LastAttemptAt == nil || now.Sub(*st.LastAttemptAt) >= perfEvery)
+	retry := st.LastAttemptAt != nil && st.Failures > 0 && st.Failures <= perfMaxRetries && perfTransient(st.LastErrorKind) &&
+		now.Sub(*st.LastAttemptAt) >= perfRetryAfter
+	return weekly || retry
+}
+
+// perfDueAccounts : les comptes à analyser au Tick.
+func perfDueAccounts(d *Data, now time.Time) []string {
+	var names []string
+	for _, a := range d.Accounts {
+		if perfAccountDue(d, a.Name, now) {
+			names = append(names, a.Name)
+		}
+	}
+	return names
 }

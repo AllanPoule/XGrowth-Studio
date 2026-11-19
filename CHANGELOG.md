@@ -15,7 +15,7 @@ dernière version.
   preuves ; le propriétaire accepte, refuse ou retire, rien n'est accepté d'office.
 - **Plafond** de 20 règles de performance en place par compte.
 - CLI : `rules analyze`.
-- Case hebdomadaire : analyse planifiée (7 jours et 5 nouveaux posts publiés).
+- Case hebdomadaire : analyse planifiée par compte (7 jours depuis son dernier succès et 5 de ses posts devenus éligibles ; reprise après 6 h en cas d'erreur passagère).
 
 ## V0.09 — 18 novembre 2026
 

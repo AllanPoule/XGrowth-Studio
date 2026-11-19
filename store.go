@@ -205,7 +205,9 @@ type Settings struct {
 	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
 	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
 	// Analyse des performances : propose des règles à partir des statistiques.
-	AutoPerfAnalysis   bool       `json:"autoPerfAnalysis"` // analyse hebdomadaire, désactivée par défaut
+	AutoPerfAnalysis bool `json:"autoPerfAnalysis"` // analyse hebdomadaire, désactivée par défaut
+	// Obsolète depuis la v3 : l'état est par compte (Data.PerfStates). Lu une
+	// seule fois, par migrate, comme dernier succès de chaque compte.
 	LastPerfAnalysisAt *time.Time `json:"lastPerfAnalysisAt,omitempty"`
 
 	// Campagnes de réponses : consigne des commentaires (vide = défaut).
@@ -244,6 +246,8 @@ type Data struct {
 	Learnings  []Learning   `json:"learnings"`
 	// règles tirées des retours par la synthèse
 	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
+	// état de l'analyse des performances, par compte (clé : nom en minuscules)
+	PerfStates map[string]*PerfState `json:"perfStates,omitempty"`
 	// banque d'idées de posts originaux
 	Ideas []*Idea    `json:"ideas,omitempty"`
 	Log   []LogEntry `json:"log"`
@@ -348,7 +352,7 @@ func (s *Store) reload() error {
 	return nil
 }
 
-const dataVersion = 2
+const dataVersion = 3
 
 // migrate met à jour un data.json écrit par une version précédente.
 // Renvoie true si quelque chose a changé.
@@ -374,8 +378,35 @@ func migrate(d *Data) bool {
 			}
 		}
 	}
+	if d.Version < 3 {
+		// L'horodatage global de l'analyse des performances sert de dernier
+		// succès à chaque compte.
+		if at := d.Settings.LastPerfAnalysisAt; at != nil {
+			for _, a := range d.Accounts {
+				if d.PerfStates[perfKey(a.Name)] == nil {
+					t := *at
+					d.perfState(a.Name).LastSuccessAt = &t
+				}
+			}
+			d.Settings.LastPerfAnalysisAt = nil
+		}
+	}
 	d.Version = dataVersion
 	return true
+}
+
+// perfState renvoie l'état d'analyse du compte, créé au besoin (écriture : à
+// appeler dans un Update).
+func (d *Data) perfState(account string) *PerfState {
+	if d.PerfStates == nil {
+		d.PerfStates = map[string]*PerfState{}
+	}
+	st := d.PerfStates[perfKey(account)]
+	if st == nil {
+		st = &PerfState{}
+		d.PerfStates[perfKey(account)] = st
+	}
+	return st
 }
 
 func (s *Store) save() error {

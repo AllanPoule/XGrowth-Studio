@@ -690,7 +690,7 @@ function rulesBlock() {
         : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${esc(r.id)}">Remettre</button>` : ""}</td></tr>`;
   const live = rules.filter(r => r.status === "proposed" || r.status === "accepted"), old = rules.filter(r => r.status === "refused" || r.status === "revoked");
   return `<h3 style="margin-top:22px">Règles apprises</h3>
-    <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>
+    <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée est évitée dans les propositions suivantes.</p>
     <div class="row"><label class="toggle"><input type="checkbox" data-setting="rulesAutoAccept" ${S.settings.rulesAutoAccept ? "checked" : ""}><span class="sw"></span>Appliquer d'office les règles proposées</label>
       <label class="toggle"><input type="checkbox" data-setting="autoSynthesis" ${S.settings.autoSynthesis ? "checked" : ""}><span class="sw"></span>Synthèse chaque semaine</label>
       <span class="spacer"></span><span class="small muted">${pending} retour${pending > 1 ? "s" : ""} à synthétiser</span>
@@ -932,7 +932,7 @@ const actions = {
   },
   async "pt-del"(b) { dirty = true; const box = b.closest("[data-types]"); b.closest(".ptype").remove(); syncTypesEmpty(box) },
   async synthesize(b) { await run(b, () => api("/api/rules/synthesize", {}), r => r.proposed.length ? `${r.proposed.length} règle(s) tirée(s) de ${r.examined} retours` : `${r.examined} retours relus, aucune règle nouvelle`, { wait: "Synthèse…" }) },
-  async "perf-analyze"(b) { await run(b, () => api("/api/rules/analyze", {}), r => { const n = r.accounts.reduce((k, a) => k + a.proposed.length, 0); return n ? `${n} règle(s) proposée(s)` : (r.accounts.map(a => a.skipped).find(Boolean) || "Aucune règle nouvelle"); }, { wait: "Analyse…" }) },
+  async "perf-analyze"(b) { await run(b, () => api("/api/rules/analyze", {}), r => { const n = r.accounts.reduce((k, a) => k + a.proposed.length, 0), err = r.accounts.map(a => a.error).find(Boolean); if (err) return `analyse impossible pour un compte : ${err}${n ? ` · ${n} règle(s) proposée(s) pour les autres` : ""}`; return n ? `${n} règle(s) proposée(s)` : (r.accounts.map(a => a.skipped).find(Boolean) || "Aucune règle nouvelle"); }, { wait: "Analyse…" }) },
   async "rule-accept"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/accept`, { text: $(`[data-rule="${b.dataset.id}"]`)?.value || "" }), "Règle en place") },
   async "rule-refuse"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/refuse`, {}), "Règle refusée") },
   async "rule-revoke"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/revoke`, {}), "Règle retirée") },
