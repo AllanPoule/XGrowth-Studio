@@ -534,10 +534,11 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 					interrupted = true
 				} else {
 					aiFailed = append(aiFailed, a.Name)
-					// le détail du fournisseur ne va qu'au journal du
-					// processus (sortie d'erreur), jamais dans data.json ni
-					// dans l'erreur renvoyée (audit B4)
-					s.logf("analyse des performances : échec de l'appel IA : %v", err)
+					// le message du fournisseur peut contenir du texte de
+					// post, un secret ou un chemin : seule la catégorie fixe
+					// va au journal du processus, comme dans data.json et
+					// l'erreur renvoyée (audit B4, LOT1-T14)
+					s.logf("analyse des performances : échec de l'appel IA (%s)", perfErrorKind(err))
 				}
 				continue
 			}
@@ -733,8 +734,9 @@ func (s *Studio) lockPerf() (unlock func(), err error) {
 			return nil, errPerfBusy
 		}
 	}
-	// chemin et cause système seulement au journal du processus
-	s.logf("analyse des performances : verrou indisponible : %v", err)
+	// l'erreur système contient le chemin du verrou : texte fixe au journal
+	// du processus, la cause reste dans l'erreur pour errors.Is
+	s.logf("analyse des performances : verrou indisponible")
 	return nil, &perfError{msg: "analyse des performances : verrou indisponible", cause: err}
 }
 
