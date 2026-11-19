@@ -565,11 +565,19 @@ func TestAnalyzeBoundsPastRulesInPrompt(t *testing.T) {
 	if strings.Contains(msg, "R\u00e8gle \u00e9cart\u00e9e d'un autre compte") {
 		t.Error("une r\u00e8gle d'un autre compte ne doit pas partir \u00e0 l'IA")
 	}
-	// d\u00e9duplication globale : aucune des deux r\u00e8gles repropos\u00e9es n'est cr\u00e9\u00e9e
+	// déduplication sur les règles du compte, même absentes du prompt : la
+	// règle écartée la plus ancienne de main n'est pas reproposée. Celle d'un
+	// autre compte, que l'IA ne voit pas, peut être proposée à main (LOT1-T13,
+	// audit B5 ; avant, la déduplication portait sur tous les comptes).
+	otherProposed := false
 	for _, r := range perfRules(e.st.store.Snapshot()) {
-		if r.Status == RuleProposed && (r.Text == past(0) || r.Text == "R\u00e8gle \u00e9cart\u00e9e d'un autre compte") {
-			t.Errorf("r\u00e8gle \u00e9cart\u00e9e repropos\u00e9e : %+v", r)
+		if r.Status == RuleProposed && r.Text == past(0) {
+			t.Errorf("règle écartée reproposée : %+v", r)
 		}
+		otherProposed = otherProposed || (r.Status == RuleProposed && r.Account == "main" && r.Text == "Règle écartée d'un autre compte")
+	}
+	if !otherProposed {
+		t.Error("une règle écartée pour un autre compte doit pouvoir être proposée à main")
 	}
 
 	// la synth\u00e8se des retours garde son message : toutes les r\u00e8gles, sans limite
@@ -884,11 +892,12 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 	if e.ai.calls != 2 || len(res.Accounts) != 3 {
 		t.Fatalf("%d appel(s) IA pour %d compte(s), attendu 2 pour 3", e.ai.calls, len(res.Accounts))
 	}
-	// les textes proposés à « main » ne sont pas reproposés à « second » :
-	// le dédoublonnage vaut pour tous les comptes (critère 5 du ticket)
+	// la règle commune n'est proposée à aucun compte ; depuis LOT1-T13
+	// (audit B5), la déduplication suit ce que l'IA voit pour chaque compte :
+	// les textes proposés à « main » peuvent l'être aussi à « second »
 	wantTexts := map[string][]string{
 		"main":   {"Privilégie ce qui marche pour source:veille", "Privilégie ce qui marche pour type:utile", "Règle propre au compte main"},
-		"second": {"Règle propre au compte second"},
+		"second": {"Privilégie ce qui marche pour source:veille", "Privilégie ce qui marche pour type:utile", "Règle propre au compte second"},
 	}
 	for _, ar := range res.Accounts {
 		if ar.Account == "vide" {
@@ -916,7 +925,8 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 			t.Errorf("%s : règles %q, attendu %q", ar.Account, got, wantTexts[ar.Account])
 		}
 	}
-	// une règle refusée pour « second » n'est pas reproposée à « main »
+	// une règle refusée pour « second » n'est pas reproposée à « second » ;
+	// « main », dont la demande ne la montre pas, peut la recevoir (LOT1-T13)
 	if err := e.st.store.Update(func(d *Data) error {
 		d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: "r_second", Account: "second", Text: "Favorise les exemples concrets", Status: RuleRefused})
 		return nil
@@ -931,8 +941,12 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ar := range res.Accounts {
-		if len(ar.Proposed) != 0 {
-			t.Errorf("seconde analyse, %s : %d règle(s), attendu 0", ar.Account, len(ar.Proposed))
+		want := 0
+		if ar.Account == "main" {
+			want = 1
+		}
+		if len(ar.Proposed) != want {
+			t.Errorf("seconde analyse, %s : %d règle(s), attendu %d", ar.Account, len(ar.Proposed), want)
 		}
 	}
 	// une ligne de journal par compte et par analyse
@@ -947,44 +961,34 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 	}
 }
 
-// Une analyse lancée plus tôt qui finit après une autre ne fait pas reculer
-// LastPerfAnalysisAt (qui sert au déclenchement hebdomadaire). Depuis
-// LOT1-T10, un processus ne fait qu'une analyse à la fois : la seconde vient
-// d'un autre processus (la CLI pendant `serve`), simulé par un second Studio
-// sur le même dossier.
+// Une analyse datée plus tôt qui s'enregistre après une autre ne fait pas
+// reculer LastPerfAnalysisAt (qui sert au déclenchement hebdomadaire). Depuis
+// LOT1-T13, deux analyses ne se chevauchent plus, même entre processus
+// (TestPerfAnalysesBetweenProcessesMakeOneAICall) : le cas restant est celui
+// de deux horloges décalées (la CLI sur une autre machine, ou une horloge
+// corrigée entre deux analyses), simulé par une seconde analyse à une date
+// plus ancienne que la première.
 func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
 	e := newEnv(t)
 	perfFixture(t, e, "main")
-	other, err := OpenStore(filepath.Dir(e.st.store.path))
-	if err != nil {
+	late := e.now
+	early := late.Add(-time.Minute)
+	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
 		t.Fatal(err)
 	}
-	cli := NewStudio(other)
-	cli.ai, cli.now = e.st.ai, e.st.now
-	early := e.now
-	late := early.Add(time.Minute)
-	nested := false
-	e.ai.perf = func(string) []map[string]any {
-		if !nested {
-			// pendant l'appel IA de la première analyse, une seconde
-			// analyse démarre plus tard et se termine avant elle
-			nested = true
-			e.now = late
-			if _, err := cli.AnalyzePerformance(context.Background(), "main"); err != nil {
-				t.Error(err)
-			}
-		}
-		return nil
-	}
+	e.now = early
 	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
 		t.Fatal(err)
 	}
 	if e.ai.calls != 2 {
 		t.Fatalf("%d appel(s) IA, attendu 2", e.ai.calls)
 	}
-	got := e.st.store.Snapshot().Settings.LastPerfAnalysisAt
-	if got == nil || !got.Equal(late) {
+	d := e.st.store.Snapshot()
+	if got := d.Settings.LastPerfAnalysisAt; got == nil || !got.Equal(late) {
 		t.Errorf("LastPerfAnalysisAt = %v, attendu %v (pas %v)", got, late, early)
+	}
+	if got := d.Settings.PerfState["main"].LastAt; !got.Equal(late) {
+		t.Errorf("PerfState[main].LastAt = %v, attendu %v (pas %v)", got, late, early)
 	}
 }
 
@@ -2511,5 +2515,399 @@ func TestPerfAcceptDuringAnalysisKeepsCapAndProposals(t *testing.T) {
 	}
 	if n := perfAcceptedCount(e.st.store.Snapshot(), "main"); n != perfMaxAccepted {
 		t.Fatalf("%d règles de performance en place après le refus, attendu %d", n, perfMaxAccepted)
+	}
+}
+
+// ---------------------------------------------------------------- LOT1-T13 (audit contradictoire 2)
+
+// perfOtherProcess : un second studio sur le même data.json, comme la CLI
+// (« xgrowth rules analyze ») ou « xgrowth run » à côté de « xgrowth serve ».
+// Son Store et ses descripteurs de fichiers sont les siens, comme dans un
+// autre processus.
+func perfOtherProcess(t *testing.T, e *env, ai AI) *Studio {
+	t.Helper()
+	store, err := OpenStore(filepath.Dir(e.st.store.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := NewStudio(store)
+	st.ai = func(Settings) AI { return ai }
+	st.backendFor = e.st.backendFor
+	st.now = func() time.Time { return e.now }
+	st.logf = func(string, ...any) {}
+	return st
+}
+
+// Audit B3, repris (TestAudit2DefautAnalysesEntreProcessus) : le verrou « une
+// seule analyse à la fois » vaut aussi entre processus. Deux studios sur le
+// même data.json (deux planificateurs, ou la CLI pendant serve) ne font qu'un
+// appel IA pour le compte et au plus perfMaxProposals propositions. Échouait
+// sur b6a1c7e : 2 appels IA et 4 propositions.
+func TestPerfAnalysesBetweenProcessesMakeOneAICall(t *testing.T) {
+	ctx := context.Background()
+	t.Run("deux planificateurs", func(t *testing.T) {
+		e := newEnv(t)
+		perfFixture(t, e, "main")
+		freshMetrics(t, e)
+		e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+		e.st.logf = func(string, ...any) {}
+		ai := &perfBlockingAI{both: make(chan struct{})}
+		e.st.ai = func(Settings) AI { return ai }
+		other := perfOtherProcess(t, e, ai)
+		var wg sync.WaitGroup
+		for _, st := range []*Studio{e.st, other} {
+			wg.Add(1)
+			go func(st *Studio) { defer wg.Done(); st.Tick(ctx) }(st)
+		}
+		wg.Wait()
+		if n := len(perfRules(e.st.store.Snapshot())); ai.calls != 1 || n > perfMaxProposals {
+			t.Fatalf("deux planificateurs : %d appel(s) IA pour main (attendu 1), %d proposition(s) (plafond %d)", ai.calls, n, perfMaxProposals)
+		}
+	})
+	t.Run("CLI pendant serve", func(t *testing.T) {
+		e := newEnv(t)
+		perfFixture(t, e, "main")
+		ai := &perfBlockingAI{both: make(chan struct{})}
+		e.st.ai = func(Settings) AI { return ai }
+		cli := perfOtherProcess(t, e, ai)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i, st := range []*Studio{e.st, cli} {
+			wg.Add(1)
+			go func(i int, st *Studio) { defer wg.Done(); _, errs[i] = st.AnalyzePerformance(ctx, "main") }(i, st)
+		}
+		wg.Wait()
+		busy := 0
+		for _, err := range errs {
+			if errors.Is(err, errPerfBusy) {
+				busy++
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n := len(perfRules(e.st.store.Snapshot())); ai.calls != 1 || n > perfMaxProposals || busy != 1 {
+			t.Fatalf("CLI et serve : %d appel(s) IA pour main (attendu 1), %d proposition(s) (plafond %d), %d refus errPerfBusy (attendu 1)",
+				ai.calls, n, perfMaxProposals, busy)
+		}
+	})
+}
+
+// LOT1-T13, critère 2 : le serveur (POST /api/rules/analyze) analyse deux
+// comptes ; pendant son premier appel IA, la CLI (« rules analyze », un autre
+// Store sur le même data.json) est refusée tout de suite, sans appel IA ni
+// écriture, avec un message fixe. Puis, l'analyse du serveur finie, une
+// analyse automatique de chaque côté ne refait aucun appel : 1 appel par
+// compte en tout. Le verrou est rendu : la CLI analyse ensuite normalement.
+func TestPerfCLIAndServerSameFileOneCallPerAccount(t *testing.T) {
+	ctx := context.Background()
+	srv, e := tuningServer(t)
+	e.st.logf = func(string, ...any) {}
+	addPerfAccount(t, e, "deux")
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "deux")
+	freshMetrics(t, e)
+	cli := perfOtherProcess(t, e, e.ai)
+	started, release := make(chan struct{}, 4), make(chan struct{})
+	// l'attente est levée même si le test échoue avant : sinon la requête du
+	// serveur reste bloquée et srv.Close attend sans fin
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	var firstMu sync.Mutex
+	first := true
+	calls := perfCallsByAccount(e, nil)
+	count := e.ai.fail
+	e.ai.fail = func(user string) error {
+		// seule la première demande d'analyse attend ; les suivantes (dont
+		// celle de la CLI si elle n'était pas refusée) passent sans attendre
+		if strings.Contains(user, "<signaux>") {
+			firstMu.Lock()
+			wait := first
+			first = false
+			firstMu.Unlock()
+			if wait {
+				started <- struct{}{}
+				<-release
+			}
+		}
+		return count(user)
+	}
+	type answer struct {
+		code int
+		m    map[string]any
+	}
+	done := make(chan answer, 1)
+	go func() {
+		code, m := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", `{}`)
+		done <- answer{code, m}
+	}()
+	<-started // le serveur attend la réponse de l'IA pour son premier compte
+	before, err := os.ReadFile(e.st.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := runCommand(t, func() { cmdRules(ctx, cli, parseArgs([]string{"analyze"})) })
+	msg := fmt.Sprint(out["error"])
+	if code == 0 || !strings.Contains(msg, errPerfBusy.Error()) {
+		t.Fatalf("CLI pendant l'analyse du serveur : code %d, sortie %v ; attendu le refus %q", code, out, errPerfBusy)
+	}
+	if after, err := os.ReadFile(e.st.store.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("data.json modifié par la CLI refusée (err %v)", err)
+	}
+	unblock()
+	if a := <-done; a.code != 200 {
+		t.Fatalf("analyse du serveur : %d %v", a.code, a.m)
+	}
+	if calls("main") != 1 || calls("deux") != 1 {
+		t.Fatalf("appels IA : main=%d deux=%d, attendu 1 chacun", calls("main"), calls("deux"))
+	}
+	n := len(perfRules(e.st.store.Snapshot()))
+	if n == 0 || n > 2*perfMaxProposals {
+		t.Fatalf("%d proposition(s) pour deux comptes, attendu de 1 à %d", n, 2*perfMaxProposals)
+	}
+	// les deux processus voient l'analyse enregistrée : aucune analyse
+	// automatique n'est due, ni d'un côté ni de l'autre
+	if err := e.st.store.Update(func(d *Data) error { d.Settings.AutoPerfAnalysis = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Minute)
+	e.st.Tick(ctx)
+	cli.Tick(ctx)
+	if calls("main") != 1 || calls("deux") != 1 {
+		t.Fatalf("après un passage de chaque planificateur : main=%d deux=%d, attendu 1 chacun", calls("main"), calls("deux"))
+	}
+	// verrou rendu : une analyse manuelle de la CLI repart
+	code, out = runCommand(t, func() { cmdRules(ctx, cli, parseArgs([]string{"analyze", "--account", "main"})) })
+	if code != 0 || calls("main") != 2 {
+		t.Fatalf("CLI après l'analyse du serveur : code %d, sortie %v, %d appel(s) pour main", code, out, calls("main"))
+	}
+}
+
+// audit B4 : texte fictif glissé par le « fournisseur » dans son erreur.
+const perfProviderLeak = "sk-ant-FICTIF-0000 /home/fictif/.config"
+
+// Audit B4, repris (TestAudit2DefautFuiteErreurFournisseurAPIetCLI) : quand
+// tous les appels IA échouent, l'API et la CLI ne recopient pas le texte brut
+// du fournisseur dans error.message ; quand l'écriture échoue, pas le chemin
+// de data.json. Échouait sur b6a1c7e : les deux y figuraient.
+func TestPerfAnalyzeErrorHidesProviderTextAndPath(t *testing.T) {
+	ctx := context.Background()
+	srv, e := tuningServer(t)
+	e.st.logf = func(string, ...any) {}
+	perfFixture(t, e, "main")
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "<signaux>") {
+			return errors.New("Claude Code : exit status 1 " + perfProviderLeak)
+		}
+		return nil
+	}
+	_, m := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", `{"account":"main"}`)
+	apiMsg := fmt.Sprint(m["error"])
+	_, out := runCommand(t, func() { cmdRules(ctx, e.st, parseArgs([]string{"analyze", "--account", "main"})) })
+	cliMsg := fmt.Sprint(out["error"])
+	e.ai.fail = nil
+	restore := breakSave(t, e.st.store.path)
+	_, m2 := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", `{"account":"main"}`)
+	restore()
+	saveMsg := fmt.Sprint(m2["error"])
+	if strings.Contains(apiMsg, perfProviderLeak) {
+		t.Errorf("API : texte brut du fournisseur dans error.message : %s", apiMsg)
+	}
+	if strings.Contains(cliMsg, perfProviderLeak) {
+		t.Errorf("CLI : texte brut du fournisseur dans error.message : %s", cliMsg)
+	}
+	if strings.Contains(saveMsg, e.st.store.path) {
+		t.Errorf("API : chemin de data.json dans error.message : %s", saveMsg)
+	}
+}
+
+// LOT1-T13, critère 3 : aucune erreur renvoyée par l'analyse, à l'API comme
+// à la CLI, ne contient le message du fournisseur, un chemin de fichier ni le
+// nom de compte demandé : échec de tous les appels IA, échec de l'écriture,
+// verrou impossible à ouvrir, compte inconnu. Chaque message est une
+// catégorie fixe ; errors.Is reconnaît toujours la cause, et le détail du
+// fournisseur va au journal du processus seulement (jamais au journal de
+// data.json).
+func TestPerfAnalyzeErrorsCarryOnlyFixedCategory(t *testing.T) {
+	ctx := context.Background()
+	srv, e := tuningServer(t)
+	var logged []string
+	var logMu sync.Mutex
+	e.st.logf = func(format string, args ...any) {
+		logMu.Lock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+		logMu.Unlock()
+	}
+	perfFixture(t, e, "main")
+	dir := filepath.Dir(e.st.store.path)
+	errProvider := errors.New("HTTP 401 : " + perfProviderLeak + " Astuce fictive numéro 1")
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "<signaux>") {
+			return errProvider
+		}
+		return nil
+	}
+	// côté API et côté CLI, le même message, sans rien de variable
+	both := func(body string, args ...string) (string, string) {
+		t.Helper()
+		st, m := call(t, &http.Client{}, "POST", srv.URL+"/api/rules/analyze", body)
+		code, out := runCommand(t, func() { cmdRules(ctx, e.st, parseArgs(append([]string{"analyze"}, args...))) })
+		if st == 200 || code == 0 {
+			t.Fatalf("erreur attendue : API %d %v, CLI %d %v", st, m, code, out)
+		}
+		api, _ := m["error"].(map[string]any)
+		cli, _ := out["error"].(map[string]any)
+		return fmt.Sprint(api["message"]), fmt.Sprint(cli["message"])
+	}
+	clean := func(what, msg string, forbidden ...string) {
+		t.Helper()
+		for _, f := range append([]string{perfProviderLeak, "Astuce fictive", "HTTP 401", dir, "data.json.tmp", "perf.lock"}, forbidden...) {
+			if strings.Contains(msg, f) {
+				t.Errorf("%s : %q dans le message renvoyé %q", what, f, msg)
+			}
+		}
+	}
+
+	// 1. tous les appels IA échouent
+	api, cli := both(`{"account":"main"}`, "--account", "main")
+	want := "analyse des performances : aucun appel IA n'a abouti : " + perfErrorKind(errProvider)
+	if api != want || cli != want {
+		t.Errorf("échec de l'IA : API %q, CLI %q, attendu %q", api, cli, want)
+	}
+	clean("échec de l'IA", api)
+	clean("échec de l'IA", cli)
+	if _, err := e.st.AnalyzePerformance(ctx, "main"); !errors.Is(err, errProvider) {
+		t.Errorf("errors.Is ne reconnaît plus l'erreur du fournisseur : %v", err)
+	}
+	logMu.Lock()
+	detail := 0
+	for _, l := range logged {
+		if strings.Contains(l, "HTTP 401") {
+			detail++
+		}
+	}
+	logMu.Unlock()
+	if detail == 0 {
+		t.Error("le détail du fournisseur doit aller au journal du processus")
+	}
+	for _, l := range e.st.store.Snapshot().Log {
+		if strings.Contains(l.Message, "analyse des performances") {
+			clean("journal de data.json", l.Message)
+		}
+	}
+
+	// 2. l'écriture de data.json échoue
+	e.ai.fail = nil
+	restore := breakSave(t, e.st.store.path)
+	api, cli = both(`{"account":"main"}`, "--account", "main")
+	if api != errPerfSave.Error() || cli != errPerfSave.Error() {
+		t.Errorf("échec d'écriture : API %q, CLI %q, attendu %q", api, cli, errPerfSave)
+	}
+	clean("échec d'écriture", api)
+	clean("échec d'écriture", cli)
+	_, err := e.st.AnalyzePerformance(ctx, "main")
+	var pathErr *os.PathError
+	if !errors.Is(err, errPerfSave) || !errors.As(err, &pathErr) {
+		t.Errorf("errors.Is/As ne reconnaissent plus l'échec d'écriture : %v", err)
+	}
+	restore()
+
+	// 3. le fichier de verrou ne peut pas être ouvert (un dossier à sa place)
+	lock := filepath.Join(dir, "perf.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	calls := e.ai.count()
+	api, cli = both(`{"account":"main"}`, "--account", "main")
+	if api != "analyse des performances : verrou indisponible" || cli != api {
+		t.Errorf("verrou indisponible : API %q, CLI %q", api, cli)
+	}
+	clean("verrou indisponible", api)
+	clean("verrou indisponible", cli)
+	if e.ai.count() != calls {
+		t.Error("aucun appel IA sans le verrou")
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. compte inconnu : le nom demandé n'est pas recopié
+	api, cli = both(`{"account":"compte_fictif_absent"}`, "--account", "compte_fictif_absent")
+	if api != errPerfUnknownAccount.Error() || cli != api {
+		t.Errorf("compte inconnu : API %q, CLI %q, attendu %q", api, cli, errPerfUnknownAccount)
+	}
+	clean("compte inconnu", api, "compte_fictif_absent")
+}
+
+// Audit B5, repris (TestAudit2DefautRegleDUnCompteBloqueLAutre) : la
+// déduplication suit ce que voit l'IA. Une règle en place pour main seulement
+// (absente de la demande faite pour deux) n'empêche pas de la proposer à
+// deux. Échouait sur b6a1c7e : écartée sans message, l'appel payé pour rien.
+// Les règles que l'IA voit pour deux (communes, sans compte, de deux) restent
+// écartées.
+func TestPerfDedupFollowsRulesSeenByAI(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	addPerfAccount(t, e, "deux")
+	perfFixture(t, e, "deux")
+	text := "Privilégie ce qui marche pour type:utile" // ce que fakeAI propose
+	now := e.now
+	e.seedRules(t, &RuleProposal{ID: "r_main", Account: "main", Text: text,
+		Source: RuleSourcePerformance, Status: RuleAccepted, CreatedAt: now, DecidedAt: &now})
+	res, err := e.st.AnalyzePerformance(ctx, "deux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	var got []string
+	for _, r := range res.Accounts[0].Proposed {
+		found = found || (r.Text == text && r.Account == "deux")
+		got = append(got, r.Text)
+	}
+	if strings.Contains(e.ai.lastMsg, text) || !found {
+		t.Fatalf("la règle de main (dans la demande : %v) doit être proposée à deux ; propositions : %q",
+			strings.Contains(e.ai.lastMsg, text), got)
+	}
+
+	// ce que l'IA voit pour deux est écarté : règle sans compte refusée, règle
+	// commune (Settings.Rules), règle de deux retirée. Chaque cas repart des
+	// seules règles de main (la proposition faite à deux ci-dessus est ôtée).
+	reset := func(rules ...*RuleProposal) {
+		t.Helper()
+		if err := e.st.store.Update(func(d *Data) error {
+			d.RuleProposals = append([]*RuleProposal{{ID: "r_main", Account: "main", Text: text,
+				Source: RuleSourcePerformance, Status: RuleAccepted, CreatedAt: now, DecidedAt: &now}}, rules...)
+			d.Settings.Rules = nil
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, seed := range []func(){
+		func() {
+			reset(&RuleProposal{ID: "r_all", Text: text, Status: RuleRefused, CreatedAt: now, DecidedAt: &now})
+		},
+		func() { reset(); e.tune(t, nil, func(s *Settings) { s.Rules = []string{text} }) },
+		func() {
+			reset(&RuleProposal{ID: "r_deux", Account: "Deux", Text: text, Source: RuleSourcePerformance,
+				Status: RuleRevoked, CreatedAt: now, DecidedAt: &now})
+		},
+	} {
+		seed()
+		calls := e.ai.calls
+		res, err := e.st.AnalyzePerformance(ctx, "deux")
+		if err != nil || e.ai.calls != calls+1 {
+			t.Fatalf("cas %d : erreur %v, %d appel(s) IA", i, err, e.ai.calls-calls)
+		}
+		for _, r := range res.Accounts[0].Proposed {
+			if r.Text == text {
+				t.Errorf("cas %d : règle visible par l'IA pour deux reproposée : %+v", i, r)
+			}
+		}
+		if !strings.Contains(e.ai.lastMsg, text) {
+			t.Errorf("cas %d : la règle écartée doit figurer dans la demande faite pour deux", i)
+		}
 	}
 }

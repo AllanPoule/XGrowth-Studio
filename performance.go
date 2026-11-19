@@ -11,9 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -58,7 +61,8 @@ const (
 	// demande d'analyse, les plus récentes : autant que de règles de performance
 	// en place (perfMaxAccepted), ce qui suffit à lui montrer ce que le
 	// propriétaire écarte sans que le prompt grossisse à chaque refus. Les plus
-	// anciennes restent écartées par la déduplication du code, qui voit tout.
+	// anciennes restent écartées par la déduplication du code, qui voit toutes
+	// les règles du compte.
 	perfMaxPastRules = 20
 	// Après un échec de l'appel IA d'un compte, nouvel essai automatique au
 	// bout d'une heure : une panne passagère (délai dépassé, surcharge 529) se
@@ -442,8 +446,14 @@ func perfRequest(d *Data, a *Account, dg PerfDigest) string {
 // l'état et le journal. L'analyse manuelle (API, CLI, bouton) est immédiate :
 // elle ne tient compte ni de l'attente, ni du rythme hebdomadaire.
 //
-// Une seule analyse à la fois par processus : pendant qu'une analyse tourne,
-// une autre est refusée (errPerfBusy) sans appel IA ni écriture.
+// Une seule analyse à la fois sur un même data.json, dans ce processus comme
+// entre processus (CLI pendant serve, deux planificateurs) : pendant qu'une
+// analyse tourne, une autre est refusée (errPerfBusy) sans appel IA ni
+// écriture (lockPerf).
+//
+// L'erreur renvoyée n'a qu'un message fixe (perfError) : ni le texte du
+// fournisseur IA, ni un chemin de fichier, ni un nom de compte. errors.Is
+// reconnaît toujours sa cause (errPerfSave, errPerfBusy, context.Canceled…).
 func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfResult, error) {
 	return s.analyzePerformance(ctx, account, false)
 }
@@ -455,18 +465,21 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 // écriture que le reste, car une analyse ne fait qu'un store.Update (§4.3.1).
 func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bool) (*PerfResult, error) {
 	// sans ce verrou, deux analyses partent du même instantané : deux appels
-	// IA par compte et deux séries de propositions (audit A6)
-	if !s.perfMu.TryLock() {
-		return nil, errPerfBusy
+	// IA par compte et deux séries de propositions (audits A6 et B3).
+	// L'instantané est pris après le verrou : une analyse qui suit une autre
+	// voit ce que la précédente a enregistré.
+	unlock, err := s.lockPerf()
+	if err != nil {
+		return nil, err
 	}
-	defer s.perfMu.Unlock()
+	defer unlock()
 	now := s.now().UTC()
 	d := s.store.Snapshot()
 	var accounts []*Account
 	if account != "" {
 		a := d.Account(account)
 		if a == nil {
-			return nil, fmt.Errorf("compte %q inconnu", account)
+			return nil, errPerfUnknownAccount
 		}
 		accounts = []*Account{a}
 	} else {
@@ -521,6 +534,10 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 					interrupted = true
 				} else {
 					aiFailed = append(aiFailed, a.Name)
+					// le détail du fournisseur ne va qu'au journal du
+					// processus (sortie d'erreur), jamais dans data.json ni
+					// dans l'erreur renvoyée (audit B4)
+					s.logf("analyse des performances : échec de l'appel IA : %v", err)
 				}
 				continue
 			}
@@ -534,18 +551,23 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		return res, nil // plus aucun compte dû depuis la vérification de Tick
 	}
 	allFailed := failed != nil && len(todo) == 0
-	err := s.store.Update(func(d *Data) error {
+	err = s.store.Update(func(d *Data) error {
 		for _, p := range todo {
-			// textes déjà connus, de tout statut et de tout compte, comme
-			// dans Synthesize : une règle refusée pour un compte n'est pas
-			// reproposée pour un autre (le prompt, lui, reste limité aux
-			// règles pertinentes pour le compte)
+			// textes déjà connus, de tout statut, parmi les règles que l'IA
+			// voit pour ce compte (existingRulesBlock) : règles communes,
+			// règles sans compte et règles du compte. Une règle d'un autre
+			// compte, même refusée, peut donc être proposée à celui-ci : la
+			// déduplication suit ce que voit l'IA, pour qu'un appel ne soit
+			// pas payé pour une proposition écartée sans raison visible
+			// (audit B5, à confirmer par Allan)
 			existing := map[string]bool{}
 			for _, r := range d.Settings.Rules {
 				existing[strings.ToLower(strings.TrimSpace(r))] = true
 			}
 			for _, r := range d.RuleProposals {
-				existing[strings.ToLower(strings.TrimSpace(r.Text))] = true
+				if r.Account == "" || strings.EqualFold(r.Account, p.res.Account) {
+					existing[strings.ToLower(strings.TrimSpace(r.Text))] = true
+				}
 			}
 			signals := map[string]PerfSignal{}
 			for _, sg := range p.dg.Signals {
@@ -658,22 +680,63 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 	})
 	if err != nil {
 		// l'analyse est gardée en mémoire (Store.Update) : elle n'est plus due
-		// et la prochaine écriture réussie l'enregistre
-		return nil, fmt.Errorf("%w : %w", errPerfSave, err)
+		// et la prochaine écriture réussie l'enregistre. L'erreur d'écriture
+		// contient le chemin de data.json : elle n'est pas recopiée.
+		return nil, &perfError{msg: errPerfSave.Error(), cause: errors.Join(errPerfSave, err)}
 	}
 	if allFailed {
-		return nil, fmt.Errorf("analyse des performances : aucun appel IA n'a abouti : %w", failed)
+		return nil, &perfError{msg: "analyse des performances : aucun appel IA n'a abouti : " + perfErrorKind(failed), cause: failed}
 	}
 	return res, nil
 }
+
+// perfError : erreur renvoyée par l'analyse à l'API et à la CLI, qui la
+// recopient dans error.message. Son message est fixe ; la cause reste
+// reconnaissable par errors.Is (Unwrap) mais n'est jamais recopiée dans le
+// message : un fournisseur IA peut y mettre le corps d'une réponse HTTP ou la
+// fin de la sortie d'erreur d'une commande, et une erreur d'écriture contient
+// le chemin du fichier (audit B4).
+type perfError struct {
+	msg   string
+	cause error
+}
+
+func (e *perfError) Error() string { return e.msg }
+func (e *perfError) Unwrap() error { return e.cause }
 
 // errPerfSave signale que l'écriture unique de l'analyse dans data.json a
 // échoué. L'analyse (date, état du compte, propositions, journal) est gardée
 // en mémoire et sera enregistrée à la prochaine écriture réussie.
 var errPerfSave = errors.New("analyse des performances : enregistrement différé (l'analyse est gardée et sera enregistrée à la prochaine écriture réussie)")
 
-// errPerfBusy : une analyse des performances tourne déjà dans ce processus.
+// errPerfBusy : une analyse des performances tourne déjà sur ce data.json,
+// dans ce processus ou dans un autre.
 var errPerfBusy = errors.New("analyse des performances déjà en cours : réessayez quand elle sera terminée")
+
+// errPerfUnknownAccount : le compte demandé n'existe pas. Le nom reçu n'est
+// pas recopié, comme tout ce que renvoie l'analyse.
+var errPerfUnknownAccount = errors.New("analyse des performances : compte inconnu")
+
+// lockPerf prend sans attendre le verrou d'analyse, un fichier dédié à côté
+// de data.json (perf.lock). flock vaut entre processus ; chaque appel ouvre
+// son propre descripteur, donc deux analyses du même processus s'excluent
+// aussi. Verrou déjà pris : errPerfBusy. Le système le libère si le processus
+// s'arrête. unlock ferme le fichier, ce qui rend le verrou.
+func (s *Studio) lockPerf() (unlock func(), err error) {
+	f, err := os.OpenFile(filepath.Join(filepath.Dir(s.store.path), "perf.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err == nil {
+		if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			return func() { _ = f.Close() }, nil
+		}
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errPerfBusy
+		}
+	}
+	// chemin et cause système seulement au journal du processus
+	s.logf("analyse des performances : verrou indisponible : %v", err)
+	return nil, &perfError{msg: "analyse des performances : verrou indisponible", cause: err}
+}
 
 // perfErrorKind ramène une erreur de l'analyse automatique à une catégorie
 // fixe pour le journal persistant. Le message d'origine n'y est jamais
