@@ -560,8 +560,9 @@ func existingRulesBlock(d *Data, account string, maxPast int) string {
 // DecideRule accepte (texte éventuellement retouché), refuse ou retire une règle.
 // Le texte retouché d'une règle de performance passe ruleTextOK, comme une
 // proposition de l'IA, car il entre ensuite dans chaque demande à l'IA ; les
-// chiffres y restent permis, puisque c'est le propriétaire qui l'écrit. Un
-// texte vide garde celui de la règle. Les règles de retours ne changent pas.
+// chiffres y restent permis, puisque c'est le propriétaire qui l'écrit. La
+// vérification porte sur le texte reçu, avant le retrait des espaces autour.
+// Un texte vide garde celui de la règle. Les règles de retours ne changent pas.
 func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 	var out *RuleProposal
 	err := s.store.Update(func(d *Data) error {
@@ -579,7 +580,9 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 				return fmt.Errorf("%d règles apprises en place pour ce compte au plus : retirez-en une d'abord", perfMaxAccepted)
 			}
 			if r.Source == RuleSourcePerformance && text != "" {
-				if err := ruleTextOK(strings.TrimSpace(text)); err != nil {
+				// texte brut : un saut de ligne ou un dépassement que le
+				// nettoyage ci-dessous effacerait est refusé, pas corrigé.
+				if err := ruleTextOK(text); err != nil {
 					return fmt.Errorf("texte de la règle refusé : %v", err)
 				}
 			}

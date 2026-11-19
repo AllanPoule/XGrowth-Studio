@@ -606,8 +606,9 @@ func TestDecideRuleCapIgnoresFeedbackRules(t *testing.T) {
 }
 
 // Critère 3 de LOT1-T7 : le texte retouché à l'acceptation d'une règle de
-// performance passe ruleTextOK, sinon erreur et règle inchangée ; les chiffres
-// restent permis au propriétaire ; les règles de retours ne changent pas.
+// performance passe ruleTextOK tel que reçu (avant TrimSpace), sinon erreur et
+// règle inchangée (texte, statut, date) ; les chiffres restent permis au
+// propriétaire ; les règles de retours ne changent pas.
 func TestDecideRuleChecksEditedPerformanceText(t *testing.T) {
 	e := newEnv(t)
 	decided := e.now.Add(-24 * time.Hour)
@@ -626,6 +627,10 @@ func TestDecideRuleChecksEditedPerformanceText(t *testing.T) {
 		"Favorise​ les exemples":                "caractère invisible",
 		"Favorise les exemples\U000E0069":       "caractère invisible",
 		"Favorise⁦ les exemples⁩ concrets":      "caractère invisible",
+		// vérifiés avant le nettoyage : TrimSpace les effacerait
+		"Favorise les exemples concrets.\n":         "retour à la ligne",
+		"Favorise les exemples concrets.\r\n":       "retour à la ligne",
+		strings.Repeat("é", perfMaxRuleChars) + " ": "plus de 240 caractères",
 	}
 	for _, id := range []string{"r_perf", "r_back"} {
 		for text, why := range bad {
