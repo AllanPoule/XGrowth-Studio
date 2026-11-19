@@ -620,10 +620,13 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 				retryAt = st.NextAt
 			}
 		}
-		// date globale, pour l'affichage seulement : elle avance dès qu'un
-		// appel a été tenté, même en échec ; une analyse interrompue avant
-		// tout appel ne la change pas, et elle ne recule pas
-		if attempted > 0 || failed == nil {
+		// date globale, pour l'affichage une fois qu'un état par compte
+		// existe : elle avance dès qu'un appel a été tenté, même en échec ;
+		// une analyse interrompue avant tout appel ne la change pas, et elle
+		// ne recule pas. Sans état par compte (aucun compte analysé ici,
+		// seulement des appels coupés par l'arrêt), elle commande encore le
+		// déclenchement de tous les comptes (perfLastAt) : elle ne bouge pas.
+		if (attempted > 0 || failed == nil) && len(d.Settings.PerfState) > 0 {
 			if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
 				d.Settings.LastPerfAnalysisAt = &now
 			}

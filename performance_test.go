@@ -1840,6 +1840,71 @@ func TestPerfShutdownKeepsRemainingAccountsDue(t *testing.T) {
 	wantState(t, e.st.store.Snapshot(), "second", e.now, 0, time.Time{})
 }
 
+// Défaut A4 de l'audit, sans état par compte (ancien data.json ou installation
+// neuve) : un appel coupé par l'arrêt du studio, ou par le départ du client de
+// l'API, n'écrit aucun état ; la date globale, qui commande alors encore le
+// déclenchement de tous les comptes, ne bouge pas et le compte est repris au
+// passage suivant.
+func TestPerfCanceledCallWithoutStateKeepsAccountsDue(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		legacy, manual bool
+	}{
+		{name: "ancien fichier", legacy: true},
+		{name: "installation neuve", legacy: false},
+		{name: "installation neuve, analyse manuelle", legacy: false, manual: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			perfFixture(t, e, "main") // 10 posts publiés il y a 10 jours
+			e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+			var legacyAt *time.Time
+			if tc.legacy {
+				at := e.now.Add(-8 * 24 * time.Hour)
+				legacyAt = &at
+				recentPerf(t, e, at) // 5 posts publiés depuis l'ancienne date
+			} else {
+				freshMetrics(t, e)
+			}
+			if d := e.st.store.Snapshot(); d.Settings.PerfState != nil || !perfAccountDue(d, "main", e.now) {
+				t.Fatal("prérequis : aucun état par compte et main dû")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			e.ai.fail = func(string) error {
+				cancel() // l'arrêt arrive pendant l'appel pour main
+				return context.Canceled
+			}
+			if tc.manual {
+				if _, err := e.st.AnalyzePerformance(ctx, ""); !errors.Is(err, context.Canceled) {
+					t.Fatalf("analyse manuelle coupée : erreur %v, attendu context.Canceled", err)
+				}
+			} else {
+				e.st.Tick(ctx)
+			}
+			if e.ai.calls != 1 {
+				t.Fatalf("prérequis : 1 appel IA coupé, obtenu %d", e.ai.calls)
+			}
+			d := e.st.store.Snapshot()
+			if last := d.Settings.LastPerfAnalysisAt; (last == nil) != (legacyAt == nil) || (last != nil && !last.Equal(*legacyAt)) {
+				t.Fatalf("date globale après l'appel coupé : %v, attendu %v", last, legacyAt)
+			}
+			if len(d.Settings.PerfState) != 0 {
+				t.Fatalf("état écrit après l'appel coupé : %+v", d.Settings.PerfState)
+			}
+			// redémarrage une minute plus tard : main est repris tout de suite
+			e.ai.fail = nil
+			e.now = e.now.Add(time.Minute)
+			if !perfAccountDue(e.st.store.Snapshot(), "main", e.now) {
+				t.Fatal("main n'est plus dû après l'appel coupé")
+			}
+			if e.st.Tick(context.Background()); e.ai.calls != 2 {
+				t.Fatalf("après le redémarrage : %d appel(s) IA, attendu 2", e.ai.calls)
+			}
+			wantState(t, e.st.store.Snapshot(), "main", e.now, 0, time.Time{})
+		})
+	}
+}
+
 // Critère 2 de LOT1-T9 : un compte ajouté alors que les autres ont un
 // historique est analysé dès qu'il remplit ses propres conditions.
 func TestPerfNewAccountAnalyzedOnItsOwnConditions(t *testing.T) {

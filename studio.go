@@ -997,8 +997,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if perfAnalysisDue(s.store.Snapshot(), s.now()) {
 		// seuls les comptes dus sont analysés, chacun selon son propre état
-		// (perfAccountDue). En cas d'échec de l'IA, analyzePerformance a déjà journalisé l'erreur
-		// (par catégorie fixe) et le prochain essai dans son unique écriture.
+		// (perfAccountDue). En cas d'échec de l'IA, analyzePerformance a déjà
+		// journalisé l'erreur (par catégorie fixe) et le prochain essai dans
+		// son unique écriture.
 		// Si c'est cette écriture qui a échoué, le journal de data.json ne peut
 		// pas le dire : l'échec va au journal du processus, avec un message
 		// fixe qui ne recopie pas l'erreur, et Tick continue.
