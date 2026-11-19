@@ -241,11 +241,15 @@ func ruleTextOK(text string) error {
 }
 
 // PerfAccountResult : bilan de l'analyse d'un compte. Skipped dit pourquoi
-// aucune demande n'a été faite à l'IA.
+// aucune demande n'a été faite à l'IA ; Error, que la demande a échoué. Error
+// ne contient qu'une catégorie fixe (perfErrorKind), jamais le message du
+// fournisseur : le résultat d'une analyse automatique peut être affiché par le
+// planificateur.
 type PerfAccountResult struct {
 	Account  string          `json:"account"`
 	Eligible int             `json:"eligible"`
 	Skipped  string          `json:"skipped,omitempty"`
+	Error    string          `json:"error,omitempty"`
 	Proposed []*RuleProposal `json:"proposed"`
 }
 
@@ -354,6 +358,14 @@ func perfRequest(d *Data, a *Account, dg PerfDigest) string {
 // propositions sont validées par le code ; les règles retenues restent
 // toujours « proposées », même avec RulesAutoAccept (décision 2 d'Allan) :
 // seul DecideRule les accepte.
+//
+// Une erreur de l'IA pour un compte n'arrête pas l'analyse des autres : le
+// compte en échec la porte dans son résultat (Error) et les propositions déjà
+// obtenues sont enregistrées. LastPerfAnalysisAt avance dès qu'un appel IA a
+// été tenté, même en échec, pour que le planificateur ne relance pas l'analyse
+// à chaque passage quand le fournisseur échoue (quota, clé invalide). Si tous
+// les appels tentés échouent, l'analyse renvoie une erreur (pour l'API et la
+// CLI), après avoir enregistré cette date et le journal.
 func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfResult, error) {
 	d := s.store.Snapshot()
 	now := s.now().UTC()
@@ -374,6 +386,8 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 	}
 	res := &PerfResult{Accounts: []*PerfAccountResult{}}
 	var todo []*pending
+	attempted := 0   // appels IA tentés, réussis ou non
+	var failed error // première erreur d'un compte
 	for _, a := range accounts {
 		dg := ComputePerfDigest(d, a.Name, now)
 		ar := &PerfAccountResult{Account: a.Name, Eligible: dg.Eligible, Proposed: []*RuleProposal{}}
@@ -385,10 +399,22 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 			ar.Skipped = "aucun groupe de posts ne s'écarte nettement de la médiane du compte"
 		case n >= perfMaxAccepted:
 			ar.Skipped = fmt.Sprintf("%d règles de performance déjà en place, le plafond est de %d : retirez-en une d'abord", n, perfMaxAccepted)
+		case ctx.Err() != nil:
+			// analyse interrompue (arrêt du studio, client parti) : les
+			// comptes suivants ne sont pas demandés à l'IA
+			ar.Error = perfErrorKind(ctx.Err())
+			if failed == nil {
+				failed = ctx.Err()
+			}
 		default:
 			p := &pending{res: ar, dg: dg}
+			attempted++
 			if err := s.aiFor(a).JSON(ctx, perfSystem, perfRequest(d, a, dg), perfSchema, &p.out); err != nil {
-				return nil, err
+				ar.Error = perfErrorKind(err)
+				if failed == nil {
+					failed = err
+				}
+				continue
 			}
 			todo = append(todo, p)
 		}
@@ -450,14 +476,23 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 			}
 		}
 		for _, ar := range res.Accounts {
-			if ar.Skipped != "" {
+			switch {
+			case ar.Skipped != "":
 				d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), aucun appel IA", ar.Eligible)
-			} else {
+			case ar.Error != "":
+				// catégorie fixe seulement, jamais le message du fournisseur
+				d.AddLog("error", "analyse des performances : %d post(s) mesuré(s), %s", ar.Eligible, ar.Error)
+			default:
 				d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), %d règle(s) proposée(s)", ar.Eligible, len(ar.Proposed))
 			}
 		}
-		// une analyse lancée plus tôt qui finit après une autre ne fait pas
-		// reculer la date (elle sert au déclenchement hebdomadaire)
+		// la date avance dès qu'un appel a été tenté, même en échec ; une
+		// analyse interrompue avant tout appel ne la change pas. Une analyse
+		// lancée plus tôt qui finit après une autre ne la fait pas reculer
+		// (elle sert au déclenchement hebdomadaire).
+		if attempted == 0 && failed != nil {
+			return nil
+		}
 		if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
 			d.Settings.LastPerfAnalysisAt = &now
 		}
@@ -465,6 +500,9 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 	})
 	if err != nil {
 		return nil, err
+	}
+	if failed != nil && len(todo) == 0 {
+		return nil, fmt.Errorf("analyse des performances : aucun appel IA n'a abouti : %w", failed)
 	}
 	return res, nil
 }
@@ -487,6 +525,8 @@ func perfErrorKind(err error) string {
 // perfAnalysisDue : l'analyse hebdomadaire est-elle due ? Il faut qu'elle soit
 // activée, que la précédente date d'au moins perfAutoEvery (ou n'ait jamais eu
 // lieu) et qu'au moins perfAutoMinNewPosts posts aient été publiés depuis.
+// Comme dans perfEligible, les publications simulées (« dry-… ») ne comptent
+// pas : elles ne seront jamais mesurées.
 func perfAnalysisDue(d *Data, now time.Time) bool {
 	if !d.Settings.AutoPerfAnalysis {
 		return false
@@ -497,7 +537,8 @@ func perfAnalysisDue(d *Data, now time.Time) bool {
 	}
 	n := 0
 	for _, p := range d.Posts {
-		if p.Status == StatusPublished && p.PublishedAt != nil && (last == nil || p.PublishedAt.After(*last)) {
+		if p.Status == StatusPublished && !strings.HasPrefix(p.TweetID, "dry-") && p.PublishedAt != nil &&
+			(last == nil || p.PublishedAt.After(*last)) {
 			n++
 		}
 	}

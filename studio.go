@@ -992,10 +992,16 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		if r, err := s.AnalyzePerformance(ctx, ""); err == nil {
 			out["perf"] = r
 		} else {
-			// catégorie fixe : le détail de l'erreur n'est pas journalisé
+			// catégorie fixe : le détail de l'erreur n'est pas journalisé. Un
+			// appel IA tenté fait avancer la date de la dernière analyse : le
+			// nouvel essai n'est promis que si l'analyse est encore due.
 			kind := perfErrorKind(err)
+			next := "nouvel essai à la prochaine échéance hebdomadaire"
+			if perfAnalysisDue(s.store.Snapshot(), s.now()) {
+				next = "nouvel essai au prochain passage"
+			}
 			_ = s.store.Update(func(d *Data) error {
-				d.AddLog("error", "analyse des performances : %s, nouvel essai au prochain passage", kind)
+				d.AddLog("error", "analyse des performances : %s, %s", kind, next)
 				return nil
 			})
 		}
