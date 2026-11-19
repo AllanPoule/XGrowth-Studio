@@ -69,6 +69,14 @@ const (
 	// appelé qu'une fois par jour pour ce compte, soit 5 appels les premières
 	// 24 h (à 0, 1, 3, 7 et 15 h), au lieu d'un par passage du planificateur.
 	perfRetryMax = 24 * time.Hour
+	// Après un échec d'écriture de data.json par l'analyse automatique, pas de
+	// nouvel essai automatique avant une heure : rien n'ayant été enregistré,
+	// l'analyse resterait due et rappellerait l'IA à chaque passage du
+	// planificateur tant que le disque refuse l'écriture (disque plein, droits).
+	// Une heure, comme le premier nouvel essai après une panne de l'IA
+	// (perfRetryFirst), suffit à corriger le disque sans payer un appel par
+	// minute. L'attente est gardée en mémoire (Studio.perfSaveWait).
+	perfSaveRetry = time.Hour
 )
 
 // perfRetryDelay : attente avant le nouvel essai automatique d'un compte après
@@ -441,6 +449,9 @@ func perfRequest(d *Data, a *Account, dg PerfDigest) string {
 // l'analyse renvoie une erreur (pour l'API et la CLI), après avoir enregistré
 // l'état et le journal. L'analyse manuelle (API, CLI, bouton) est immédiate :
 // elle ne tient compte ni de l'attente, ni du rythme hebdomadaire.
+//
+// Une seule analyse à la fois par processus : pendant qu'une analyse tourne,
+// une autre est refusée (errPerfBusy) sans appel IA ni écriture.
 func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfResult, error) {
 	return s.analyzePerformance(ctx, account, false)
 }
@@ -451,8 +462,17 @@ func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfR
 // journal qui dit quand aura lieu le nouvel essai est ajoutée dans la même
 // écriture que le reste, car une analyse ne fait qu'un store.Update (§4.3.1).
 func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bool) (*PerfResult, error) {
-	d := s.store.Snapshot()
+	// sans ce verrou, deux analyses partent du même instantané : deux appels
+	// IA par compte et deux séries de propositions (audit A6)
+	if !s.perfMu.TryLock() {
+		return nil, errPerfBusy
+	}
+	defer s.perfMu.Unlock()
 	now := s.now().UTC()
+	if auto && now.Before(s.perfSaveWait) {
+		return &PerfResult{Accounts: []*PerfAccountResult{}}, nil // disque en échec : on attend
+	}
+	d := s.store.Snapshot()
 	var accounts []*Account
 	if account != "" {
 		a := d.Account(account)
@@ -648,6 +668,11 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		return nil
 	})
 	if err != nil {
+		// rien n'est enregistré, ni en mémoire (Store.Update) : sans attente,
+		// l'analyse automatique resterait due à chaque passage
+		if auto {
+			s.perfSaveWait = now.Add(perfSaveRetry)
+		}
 		return nil, fmt.Errorf("%w : %w", errPerfSave, err)
 	}
 	if allFailed {
@@ -659,6 +684,9 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 // errPerfSave signale que l'écriture unique de l'analyse dans data.json a
 // échoué : ni la date, ni les propositions, ni le journal n'y sont enregistrés.
 var errPerfSave = errors.New("analyse des performances : enregistrement impossible")
+
+// errPerfBusy : une analyse des performances tourne déjà dans ce processus.
+var errPerfBusy = errors.New("analyse des performances déjà en cours : réessayez quand elle sera terminée")
 
 // perfErrorKind ramène une erreur de l'analyse automatique à une catégorie
 // fixe pour le journal persistant. Le message d'origine n'y est jamais

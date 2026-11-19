@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +14,11 @@ import (
 // ---------------------------------------------------------------- doublures
 
 type fakeAI struct {
+	// mu protège le compteur et le dernier message : des tests lancent des
+	// analyses en parallèle (LOT1-T10) et lisent count() pendant qu'elles
+	// tournent. Les lectures directes de calls restent sûres une fois les
+	// appels terminés.
+	mu         sync.Mutex
 	calls      int
 	lastSys    string
 	lastMsg    string
@@ -26,8 +32,12 @@ type fakeAI struct {
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
+	f.mu.Lock()
 	f.calls++
 	f.lastSys, f.lastMsg, f.lastSchema = system, user, schema
+	f.mu.Unlock()
+	// fail est appelé hors du verrou : il peut bloquer (analyse en cours) ou
+	// agir sur le studio (décision pendant l'analyse) sans gêner d'autres appels
 	if f.fail != nil {
 		if err := f.fail(user); err != nil {
 			return err
@@ -120,6 +130,13 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 	}
 	b, _ := json.Marshal(resp)
 	return json.Unmarshal(b, out)
+}
+
+// count : nombre d'appels, lu sous verrou pendant que d'autres appels tournent.
+func (f *fakeAI) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 type fakeX struct {

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -23,6 +24,15 @@ type Studio struct {
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
+	// perfMu : une seule analyse des performances à la fois dans ce
+	// processus. Elle est prise sans attendre (TryLock) : une seconde analyse
+	// est refusée (errPerfBusy), sans appel IA.
+	perfMu sync.Mutex
+	// perfSaveWait : après un échec d'écriture de l'analyse automatique, pas
+	// de nouvel essai automatique avant cette date (perfSaveRetry). Gardée en
+	// mémoire seulement, puisque le disque refuse l'écriture ; lue et écrite
+	// sous perfMu.
+	perfSaveWait time.Time
 }
 
 func NewStudio(store *Store) *Studio {
@@ -1002,7 +1012,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		// son unique écriture.
 		// Si c'est cette écriture qui a échoué, le journal de data.json ne peut
 		// pas le dire : l'échec va au journal du processus, avec un message
-		// fixe qui ne recopie pas l'erreur, et Tick continue.
+		// fixe qui ne recopie pas l'erreur, et Tick continue ; l'analyse
+		// automatique attend alors perfSaveRetry avant un nouvel essai. Si une
+		// analyse est déjà en cours (errPerfBusy), Tick la saute sans écrire.
 		r, err := s.analyzePerformance(ctx, "", true)
 		switch {
 		case err == nil:

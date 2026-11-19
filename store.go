@@ -425,7 +425,10 @@ func (s *Store) View(fn func(d *Data)) {
 	fn(s.data)
 }
 
-// Update applique fn et sauvegarde si fn ne renvoie pas d'erreur.
+// Update applique fn et sauvegarde si fn ne renvoie pas d'erreur. Si fn ou
+// l'écriture échoue, l'état en mémoire reste celui d'avant l'appel, donc celui
+// du disque : rien de ce qui n'est pas enregistré ne s'affiche, et une écriture
+// suivante ne l'enregistre pas en passant.
 func (s *Store) Update(fn func(d *Data) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -443,8 +446,13 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if err := fn(work); err != nil {
 		return err
 	}
+	old := s.data
 	s.data = work
-	return s.save()
+	if err := s.save(); err != nil {
+		s.data = old
+		return err
+	}
+	return nil
 }
 
 // Snapshot renvoie une copie profonde (via JSON) pour la lire sans verrou.
