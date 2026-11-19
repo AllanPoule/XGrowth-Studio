@@ -1335,11 +1335,25 @@ func TestConcurrentAnalysesCallAIOnceAndRefuseTheSecond(t *testing.T) {
 	e.seedAnalyzable(t)
 	ai := &barrierAI{arrived: make(chan struct{}, 2), hold: make(chan struct{})}
 	e.st.ai = func(Settings) AI { return ai }
+	var release sync.Once
+	freeAI := func() { release.Do(func() { close(ai.hold) }) }
+	defer freeAI() // sans verrou, les appels bloqués sont libérés : le test échoue vite au lieu de pendre
 	done := make(chan error, 1)
 	go func() { _, err := e.st.AnalyzePerformance(context.Background(), ""); done <- err }()
-	<-ai.arrived // la première est dans l'appel IA
-	if _, err := e.st.AnalyzePerformance(context.Background(), ""); !errors.Is(err, errPerfBusy) || err.Error() != "analyse déjà en cours" {
-		t.Fatalf("seconde demande : %v", err)
+	select {
+	case <-ai.arrived: // la première est dans l'appel IA
+	case <-time.After(5 * time.Second):
+		t.Fatal("la première analyse n'a pas appelé l'IA")
+	}
+	second := make(chan error, 1)
+	go func() { _, err := e.st.AnalyzePerformance(context.Background(), ""); second <- err }()
+	select {
+	case err := <-second:
+		if !errors.Is(err, errPerfBusy) || err.Error() != "analyse déjà en cours" {
+			t.Fatalf("seconde demande : %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("la seconde demande attend au lieu d'être refusée")
 	}
 	// le Tick, lui aussi, passe son tour sans rien journaliser
 	e.autoOn(t)
@@ -1347,7 +1361,7 @@ func TestConcurrentAnalysesCallAIOnceAndRefuseTheSecond(t *testing.T) {
 	if out := e.st.Tick(context.Background()); out["perf"] != nil {
 		t.Fatalf("Tick pendant une analyse : %v", out["perf"])
 	}
-	close(ai.hold)
+	freeAI()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -1643,5 +1657,46 @@ func TestUIEscapesRuleIdentifiersAndShowsTheErrorBeforeTheSkipReason(t *testing.
 	line := js[i : i+strings.Index(js[i:], "\n")]
 	if e, s := strings.Index(line, "a.error"), strings.Index(line, "a.skipped"); e < 0 || s < 0 || e > s {
 		t.Fatalf("l'erreur d'un compte doit passer avant son motif de saut : %s", line)
+	}
+}
+
+// Un post publié moins de 48 h avant le dernier succès, mesuré après, devient
+// éligible après ce succès : il compte comme nouveau (tue « publié après le
+// succès » à la place de « éligible après le succès »).
+func TestPerfNewEligibleCountsPostsMaturedAfterTheLastSuccess(t *testing.T) {
+	e := newEnv(t)
+	since := e.now.Add(-5 * 24 * time.Hour)
+	e.seed(t, pseed{typ: "fil", rate: 2, age: 5*24*time.Hour + time.Hour}) // publié 1 h avant le succès, mûr 47 h après
+	e.seed(t, pseed{typ: "fil", rate: 2, age: 20 * 24 * time.Hour})        // mûr bien avant le succès : ancien
+	d := e.st.store.Snapshot()
+	if n := perfNewEligible(d, "main", &since); n != 1 {
+		t.Fatalf("1 post devenu éligible après le succès attendu, %d compté(s)", n)
+	}
+	if n := perfNewEligible(d, "main", nil); n != 2 {
+		t.Fatalf("sans succès, tous comptent : %d", n)
+	}
+}
+
+// Une panne totale au Tick laisse exactement une ligne d'erreur par compte :
+// l'échec déjà journalisé compte par compte n'est pas journalisé une seconde fois.
+func TestTotalFailureAtTickLogsExactlyOneErrorLinePerAccount(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.seedSecondAccount(t)
+	e.freshMetrics(t)
+	e.autoOn(t)
+	e.ai.err = func(string) error { return errors.New("API Claude : HTTP 429 : quota dépassé") }
+	e.st.Tick(context.Background())
+	if e.ai.calls != 2 {
+		t.Fatalf("%d appel(s) IA, 2 attendus", e.ai.calls)
+	}
+	n := 0
+	for _, l := range e.st.store.Snapshot().Log {
+		if l.Level == "error" && strings.Contains(l.Message, "analyse des performances") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("une ligne d'erreur par compte (2) attendue, %d trouvée(s) : %+v", n, e.st.store.Snapshot().Log)
 	}
 }

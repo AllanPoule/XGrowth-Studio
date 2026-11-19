@@ -1003,8 +1003,10 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		case errors.Is(err, errPerfBusy), errors.As(err, &pe):
 			// analyse déjà en cours, ou échec déjà journalisé compte par compte
 		default:
+			// toute autre erreur vient du magasin (disque, data.json) : son message
+			// peut citer un chemin local, le journal n'en garde que la catégorie
 			_ = s.store.Update(func(d *Data) error {
-				d.AddLog("error", "analyse des performances : %s", aiErrorCategory(err))
+				d.AddLog("error", "analyse des performances : stockage")
 				return nil
 			})
 		}
