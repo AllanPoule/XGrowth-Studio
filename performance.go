@@ -519,13 +519,17 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w : %w", errPerfSave, err)
 	}
 	if allFailed {
 		return nil, fmt.Errorf("analyse des performances : aucun appel IA n'a abouti : %w", failed)
 	}
 	return res, nil
 }
+
+// errPerfSave signale que l'écriture unique de l'analyse dans data.json a
+// échoué : ni la date, ni les propositions, ni le journal n'y sont enregistrés.
+var errPerfSave = errors.New("analyse des performances : enregistrement impossible")
 
 // perfErrorKind ramène une erreur de l'analyse automatique à une catégorie
 // fixe pour le journal persistant. Le message d'origine n'y est jamais

@@ -891,6 +891,61 @@ func TestPerfAnalysisFailingAIOnlyOnceInTick(t *testing.T) {
 	}
 }
 
+// LOT1-T6, relecture 2 : si l'écriture unique de l'analyse automatique échoue,
+// Tick le signale dans le journal du processus par un message fixe, sans
+// recopier l'erreur, et se termine normalement.
+func TestPerfAnalysisSaveErrorLoggedInTick(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	var logged []string
+	e.st.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	// un dossier à la place du fichier temporaire fait échouer toute
+	// écriture de data.json, y compris pour root
+	tmp := e.st.store.path + ".tmp"
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(e.st.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := e.st.Tick(ctx)
+	if _, ok := out["perf"]; ok || out["at"] == nil {
+		t.Fatalf("Tick : sortie %v", out)
+	}
+	if e.ai.calls == 0 {
+		t.Fatal("l'analyse n'a pas été lancée par Tick")
+	}
+	const want = "analyse des performances : échec de l'enregistrement dans data.json"
+	n := 0
+	for _, l := range logged {
+		if l == want {
+			n++
+		}
+		if strings.Contains(l, tmp) || strings.Contains(l, "directory") {
+			t.Fatalf("erreur d'origine recopiée au journal du processus : %q", l)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("journal du processus : %q, attendu une fois %q", logged, want)
+	}
+	if after, err := os.ReadFile(e.st.store.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("data.json modifié malgré l'échec d'écriture (err %v)", err)
+	}
+	// l'API et la CLI reçoivent l'erreur, reconnaissable
+	if _, err := e.st.AnalyzePerformance(ctx, ""); !errors.Is(err, errPerfSave) {
+		t.Fatalf("AnalyzePerformance : erreur %v, attendu errPerfSave", err)
+	}
+}
+
 // Critères 1, 2, 3 et 5 de LOT1-T6 : l'échec de l'IA pour un compte ne perd pas
 // les propositions des autres ; un échec général renvoie une erreur.
 func TestAnalyzeKeepsOtherAccountsOnAIError(t *testing.T) {
