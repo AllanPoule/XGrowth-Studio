@@ -682,21 +682,40 @@ function feedbackList() {
 function rulesBlock() {
   const rules = S.rules || [], pending = (S.learnings || []).filter(l => !l.synthesizedAt).length;
   const scope = r => r.account ? "@" + esc(handleOf(r.account)) : "Tous";
+  // règle tirée des statistiques : étiquette et base chiffrée (calculée par le
+  // serveur) sous le texte ; `evidence` n'est pas affiché (identifiants de
+  // retours ou de posts selon la source)
+  const perf = r => r.source === "performance" ? `<div class="hint"><span class="pill accent">performances</span> ${esc(r.basis || "")}</div>` : "";
   const row = r => `<tr><td class="small muted" style="width:90px">${scope(r)}</td>
-    <td>${r.status === "proposed" ? `<input data-rule="${r.id}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}</td>
+    <td>${r.status === "proposed" ? `<input data-rule="${esc(r.id)}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${perf(r)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}</td>
     <td style="width:1%;white-space:nowrap"><span class="pill ${RULE_STATUS[r.status][1]}">${RULE_STATUS[r.status][0]}</span>
-      ${r.status === "proposed" ? `<button class="btn sm primary" data-act="rule-accept" data-id="${r.id}">Accepter</button><button class="btn sm ghost" data-act="rule-refuse" data-id="${r.id}">Refuser</button>`
-        : r.status === "accepted" ? `<button class="btn sm ghost" data-act="rule-revoke" data-id="${r.id}">Retirer</button>`
-        : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${r.id}">Remettre</button>` : ""}</td></tr>`;
+      ${r.status === "proposed" ? `<button class="btn sm primary" data-act="rule-accept" data-id="${esc(r.id)}">Accepter</button><button class="btn sm ghost" data-act="rule-refuse" data-id="${esc(r.id)}">Refuser</button>`
+        : r.status === "accepted" ? `<button class="btn sm ghost" data-act="rule-revoke" data-id="${esc(r.id)}">Retirer</button>`
+        : r.status === "revoked" ? `<button class="btn sm ghost" data-act="rule-accept" data-id="${esc(r.id)}">Remettre</button>` : ""}</td></tr>`;
   const live = rules.filter(r => r.status === "proposed" || r.status === "accepted"), old = rules.filter(r => r.status === "refused" || r.status === "revoked");
   return `<h3 style="margin-top:22px">Règles apprises</h3>
-    <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>
+    <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et les résultats de vos posts publiés, et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>
     <div class="row"><label class="toggle"><input type="checkbox" data-setting="rulesAutoAccept" ${S.settings.rulesAutoAccept ? "checked" : ""}><span class="sw"></span>Appliquer d'office les règles proposées</label>
       <label class="toggle"><input type="checkbox" data-setting="autoSynthesis" ${S.settings.autoSynthesis ? "checked" : ""}><span class="sw"></span>Synthèse chaque semaine</label>
       <span class="spacer"></span><span class="small muted">${pending} retour${pending > 1 ? "s" : ""} à synthétiser</span>
       <button class="btn sm" data-act="synthesize" ${pending < 2 ? "disabled title=\"2 retours au moins\"" : ""}>${I.spark} Synthétiser maintenant</button></div>
+    <div class="row" style="margin-top:8px"><label class="toggle"><input type="checkbox" data-setting="autoPerfAnalysis" ${S.settings.autoPerfAnalysis ? "checked" : ""}><span class="sw"></span>Analyse hebdomadaire des performances</label>
+      <span class="spacer"></span><span class="small muted">Les règles de performance restent à valider.</span>
+      <button class="btn sm" data-act="perf-analyze">${I.spark} Analyser les performances</button></div>
     ${live.length ? `<table style="margin-top:12px">${live.map(row).join("")}</table>` : `<p class="hint">Aucune règle apprise pour l'instant.</p>`}
     ${old.length ? `<details class="tune" style="margin-top:10px"><summary>Règles refusées ou retirées (${old.length})</summary><table>${old.map(row).join("")}</table></details>` : ""}`;
+}
+
+// bilan de POST /api/rules/analyze : nombre de règles proposées, suivi de
+// chaque compte en échec avec sa catégorie (a.error ne contient jamais le
+// message du fournisseur) ; sans proposition, l'issue de chaque compte
+// (texte brut : toast l'échappe)
+function perfMsg(r) {
+  const accs = r?.accounts || [], n = accs.reduce((t, a) => t + (a.proposed || []).length, 0);
+  if (!accs.length) return "Aucun compte à analyser";
+  const failed = a => `@${handleOf(a.account)} : analyse en échec (${a.error})`;
+  if (n) return [`${n} règle(s) proposée(s)`, ...accs.filter(a => a.error).map(failed)].join(" · ");
+  return accs.map(a => a.error ? failed(a) : `@${handleOf(a.account)} : ${a.skipped || "aucune règle nouvelle"}`).join(" · ");
 }
 
 function vSettings(v) {
@@ -928,6 +947,7 @@ const actions = {
   },
   async "pt-del"(b) { dirty = true; const box = b.closest("[data-types]"); b.closest(".ptype").remove(); syncTypesEmpty(box) },
   async synthesize(b) { await run(b, () => api("/api/rules/synthesize", {}), r => r.proposed.length ? `${r.proposed.length} règle(s) tirée(s) de ${r.examined} retours` : `${r.examined} retours relus, aucune règle nouvelle`, { wait: "Synthèse…" }) },
+  async "perf-analyze"(b) { await run(b, () => api("/api/rules/analyze", {}), perfMsg, { wait: "Analyse…" }) },
   async "rule-accept"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/accept`, { text: $(`[data-rule="${b.dataset.id}"]`)?.value || "" }), "Règle en place") },
   async "rule-refuse"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/refuse`, {}), "Règle refusée") },
   async "rule-revoke"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/revoke`, {}), "Règle retirée") },

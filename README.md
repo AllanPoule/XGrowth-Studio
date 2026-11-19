@@ -39,7 +39,7 @@ XGrowth Studio est un binaire unique (Go, aucune base de données externe) qui s
 | 🛡️ **Garde-fous** | Concurrents jamais nommés, expressions interdites, limite de longueur, pas de doublon, limite quotidienne, écart minimal entre deux posts. Tout est revérifié juste avant l'envoi, ainsi que l'identité du compte X connecté. |
 | 📡 **Veille** | Comptes et recherches X suivis, import des signets, tri par l'IA (score, raison, angle) et brouillons automatiques facultatifs. |
 | 📅 **Calendrier** | Vue semaine, file de publication, publication automatique par le planificateur. Glisser-déposer sur l'accueil (« Prochains posts ») et dans le calendrier : réordonner la file, valider un brouillon en le déposant à sa place, déplacer un post sur un autre jour. Les heures suivent toujours la programmation du compte. |
-| 📈 **Performances** | Vues, likes, reposts, réponses, taux d'engagement. Les meilleurs posts guident l'IA. |
+| 📈 **Performances** | Vues, likes, reposts, réponses, taux d'engagement. Les meilleurs posts guident l'IA. Sur demande ou chaque semaine (option), l'IA analyse les résultats de vos posts publiés et propose des règles d'écriture appuyées sur des chiffres calculés par le studio ; vous les validez une à une. |
 | 🔐 **Sécurité** | Mot de passe créé avec un code d'installation à usage unique, sessions révocables, noms d'hôte autorisés, CLI d'IA lancées **sans aucun outil**. |
 | 🤖 **Pilotable par agent** | Chaque commande CLI renvoie une enveloppe JSON, comme [AgentX](https://github.com/DezXBT/AgentX). `SKILL.md` décrit l'outil à un agent. |
 
@@ -222,6 +222,7 @@ Chaque commande imprime une enveloppe JSON : `{"ok":true,"schema_version":"1","d
 ./xgrowth posts --status draft --pretty
 ./xgrowth rewrite <id> --feedback "plus court, une seule idée"
 ./xgrowth rules synthesize                        # règles proposées à partir des retours
+./xgrowth rules analyze                           # règles proposées à partir des performances mesurées
 ./xgrowth validate <id> --by Prénom              # prochain créneau libre
 ./xgrowth watch add moncompte --search "agents IA lang:fr -is:retweet"
 ./xgrowth run                                     # planificateur seul (publication, veille, tri, stats)
@@ -277,7 +278,9 @@ identity) are checked again right before sending. It also watches accounts and s
 post, schedules on time slots and tracks performance. The AI can be tuned per account and globally: goals, target
 length, reference posts, post types with target shares, per-request instructions (original ideas, watch items,
 replies, quotes, rewrites, visual ideas), common writing rules, and rules distilled from your feedback that you
-accept, refuse or revoke.
+accept, refuse or revoke. On request, or weekly if you turn it on, the AI also analyzes how your published posts
+performed and proposes writing rules backed by figures the studio computes itself; they always wait for your
+approval.
 
 ```bash
 make build && ./xgrowth serve   # then open http://127.0.0.1:8787 and follow the onboarding

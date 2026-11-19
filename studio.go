@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,6 +20,9 @@ type Studio struct {
 	ai         func(s Settings) AI
 	backendFor func(a *Account) (XBackend, error)
 	now        func() time.Time
+	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
+	// ne peut pas aller dans le journal de data.json
+	logf func(format string, args ...any)
 }
 
 func NewStudio(store *Store) *Studio {
@@ -27,6 +31,9 @@ func NewStudio(store *Store) *Studio {
 		ai:         NewAI,
 		backendFor: BackendFor,
 		now:        time.Now,
+		logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "xgrowth : "+format+"\n", args...)
+		},
 	}
 }
 
@@ -986,6 +993,26 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 			out["synthesis"] = r
 		} else {
 			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
+		}
+	}
+	if perfAnalysisDue(s.store.Snapshot(), s.now()) {
+		// seuls les comptes dus sont analysés, chacun selon son propre état
+		// (perfAccountDue). En cas d'échec de l'IA, analyzePerformance a déjà
+		// journalisé l'erreur (par catégorie fixe) et le prochain essai dans
+		// son unique écriture.
+		// Si c'est cette écriture qui a échoué, le journal de data.json ne peut
+		// pas le dire : l'échec va au journal du processus, avec un message
+		// fixe qui ne recopie pas l'erreur, et Tick continue : l'analyse est
+		// gardée en mémoire (Store.Update) et sera enregistrée par la prochaine
+		// écriture réussie, sans nouvel appel IA d'ici là. Si une analyse est
+		// déjà en cours, dans ce processus ou dans un autre (errPerfBusy),
+		// Tick la saute sans écrire.
+		r, err := s.analyzePerformance(ctx, "", true)
+		switch {
+		case err == nil:
+			out["perf"] = r
+		case errors.Is(err, errPerfSave):
+			s.logf("analyse des performances : échec de l'enregistrement dans data.json")
 		}
 	}
 	return out
