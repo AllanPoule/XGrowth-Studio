@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -492,5 +494,159 @@ func TestCLIRulesAnalyze(t *testing.T) {
 	}
 	if r := run("settings", "--auto-perf-analysis"); r["data"].(map[string]any)["autoPerfAnalysis"] != true {
 		t.Fatalf("réglage : %v", r)
+	}
+}
+
+// clone les posts mesurés de « main » vers un second compte.
+func (e *env) seedSecondAccount(t *testing.T) {
+	t.Helper()
+	if err := e.st.SaveAccount(&Account{Name: "second", Handle: "@autre", Backend: "dryrun", Timezone: "UTC",
+		Slots: []string{"09:00"}, DailyLimit: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.store.Update(func(d *Data) error {
+		for _, p := range append([]*Post(nil), d.Posts...) {
+			c := *p
+			c.ID, c.Account, c.TweetID = newID("p"), "second", "8"+newID("t")
+			d.Posts = append(d.Posts, &c)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnalyzeAIErrorIsRetriedOnlyAfterTheWeeklyDelay(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.st.store.Update(func(d *Data) error {
+		for _, p := range d.Posts {
+			p.Metrics.UpdatedAt = e.now
+		}
+		d.Settings.AutoPerfAnalysis = true
+		return nil
+	})
+	e.ai.err = func(string) error { return errors.New("IA indisponible") }
+	e.st.Tick(ctx)
+	e.st.Tick(ctx)
+	if e.ai.calls != 1 {
+		t.Fatalf("un échec ne doit pas relancer l'appel à chaque Tick : %d appels", e.ai.calls)
+	}
+	if e.st.store.Snapshot().Settings.LastPerfAnalysisAt == nil {
+		t.Fatal("LastPerfAnalysisAt doit être mis à jour après un essai")
+	}
+	// l'appel direct renvoie l'erreur quand tous les comptes échouent
+	if _, err := e.st.AnalyzePerformance(ctx, ""); err == nil {
+		t.Fatal("erreur attendue quand tous les appels échouent")
+	}
+}
+
+func TestAnalyzeKeepsProposalsOfOtherAccountsWhenOneFails(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.seedSecondAccount(t)
+	e.ai.err = func(user string) error {
+		if e.ai.calls == 2 { // le second compte
+			return errors.New("IA indisponible")
+		}
+		return nil
+	}
+	res, err := e.st.AnalyzePerformance(context.Background(), "")
+	if err != nil {
+		t.Fatalf("une erreur globale n'est attendue que si tous les comptes échouent : %v", err)
+	}
+	if e.ai.calls != 2 || len(res.Accounts) != 2 {
+		t.Fatalf("calls=%d accounts=%d", e.ai.calls, len(res.Accounts))
+	}
+	var ok, ko *PerfAccountResult
+	for i := range res.Accounts {
+		if res.Accounts[i].Error != "" {
+			ko = &res.Accounts[i]
+		} else {
+			ok = &res.Accounts[i]
+		}
+	}
+	if ok == nil || ko == nil || len(ok.Proposed) == 0 || len(ko.Proposed) != 0 {
+		t.Fatalf("résultats : %+v", res.Accounts)
+	}
+	d := e.st.store.Snapshot()
+	if len(d.RuleProposals) != len(ok.Proposed) || d.Settings.LastPerfAnalysisAt == nil {
+		t.Fatalf("propositions du compte réussi conservées : %d, date %v", len(d.RuleProposals), d.Settings.LastPerfAnalysisAt)
+	}
+}
+
+func TestAnalyzeRejectsDigitsInRuleAndRationale(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.ai.perf = func(string) []map[string]any {
+		return []map[string]any{
+			{"text": "Écris 3 lignes", "rationale": "r", "signals": []string{"type:utile"}},
+			{"text": "Privilégie les exemples", "rationale": "Gain de 40 %", "signals": []string{"type:utile"}},
+		}
+	}
+	res, err := e.st.AnalyzePerformance(context.Background(), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := res.Accounts[0].Proposed
+	if len(p) != 1 || p[0].Text != "Privilégie les exemples" || p[0].Rationale != "" {
+		t.Fatalf("règle chiffrée écartée, justification chiffrée vidée : %+v", p)
+	}
+	mustContain(t, "consigne", e.ai.lastSys, "ni dans la règle ni dans la justification")
+}
+
+func TestDecideRuleRefusesDigitsInEditedPerformanceText(t *testing.T) {
+	e := newEnv(t)
+	e.st.store.Update(func(d *Data) error {
+		d.RuleProposals = append(d.RuleProposals,
+			&RuleProposal{ID: "r_p", Account: "main", Text: "Privilégie les exemples", Source: RuleSourcePerformance, Status: RuleProposed},
+			&RuleProposal{ID: "r_f", Account: "main", Text: "Règle des retours", Status: RuleProposed})
+		return nil
+	})
+	if _, err := e.st.DecideRule("r_p", "accept", "Écris 3 lignes"); err == nil {
+		t.Fatal("texte chiffré à l'acceptation : refus attendu")
+	}
+	if e.st.store.Snapshot().RuleProposal("r_p").Status != RuleProposed {
+		t.Fatal("la règle doit rester proposée")
+	}
+	// règles issues des retours : comportement de #4 inchangé
+	if r, err := e.st.DecideRule("r_f", "accept", "Garde 2 phrases"); err != nil || r.Status != RuleAccepted {
+		t.Fatalf("règle issue des retours : %v", err)
+	}
+}
+
+func TestPerfRequestScopesAndCapsRules(t *testing.T) {
+	e := newEnv(t)
+	e.seedAnalyzable(t)
+	e.st.store.Update(func(d *Data) error {
+		d.RuleProposals = append(d.RuleProposals,
+			&RuleProposal{ID: "r_a", Account: "autre", Text: "REGLE-AUTRE-COMPTE", Status: RuleAccepted},
+			&RuleProposal{ID: "r_g", Account: "", Text: "REGLE-GLOBALE", Status: RuleAccepted},
+			&RuleProposal{ID: "r_m", Account: "main", Text: "REGLE-EN-PLACE", Status: RuleAccepted})
+		for i := 0; i < perfMaxPastRules+5; i++ {
+			d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: newID("r"), Account: "main", Text: fmt.Sprintf("REFUSEE-%02d", i),
+				Status: RuleRefused, CreatedAt: e.now.Add(time.Duration(i) * time.Minute)})
+		}
+		return nil
+	})
+	if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	m := e.ai.lastMsg
+	mustContain(t, "demande", m, "REGLE-GLOBALE", "REGLE-EN-PLACE", "REFUSEE-24")
+	if strings.Contains(m, "REGLE-AUTRE-COMPTE") {
+		t.Fatal("règle d'un autre compte envoyée à l'IA")
+	}
+	if strings.Count(m, "(refusée)") != perfMaxPastRules || strings.Contains(m, "REFUSEE-00") {
+		t.Fatalf("liste des règles passées non plafonnée aux plus récentes : %d", strings.Count(m, "(refusée)"))
+	}
+	// une règle d'un autre compte ne bloque pas un doublon pour ce compte
+	e.ai.perf = func(string) []map[string]any {
+		return []map[string]any{{"text": "regle-autre-compte", "rationale": "r", "signals": []string{"type:utile"}}}
+	}
+	res, err := e.st.AnalyzePerformance(context.Background(), "main")
+	if err != nil || len(res.Accounts[0].Proposed) != 1 {
+		t.Fatalf("doublon limité au compte et au global : %v %+v", err, res.Accounts[0])
 	}
 }

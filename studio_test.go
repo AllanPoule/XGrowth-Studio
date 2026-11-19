@@ -18,11 +18,17 @@ type fakeAI struct {
 	lastMsg    string
 	lastSchema map[string]any
 	perf       func(user string) []map[string]any // réponse injectée de l'analyse des performances
+	err        func(user string) error            // erreur injectée (nil = pas d'erreur)
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
 	f.calls++
 	f.lastSys, f.lastMsg, f.lastSchema = system, user, schema
+	if f.err != nil {
+		if err := f.err(user); err != nil {
+			return err
+		}
+	}
 	var resp any
 	props := schema["properties"].(map[string]any)
 	switch {

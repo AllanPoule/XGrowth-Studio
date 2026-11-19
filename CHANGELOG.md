@@ -4,6 +4,19 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.10 — 19 novembre 2026
+
+[PR n°18](https://github.com/AllanPoule/XGrowth-Studio/pull/18) · Mémoire persistante et auto-amélioration, lot 1
+
+### Ajouté
+- **Analyse des performances** : le code résume les posts mesurés (taux d'engagement médian par type, longueur,
+  genre et origine) ; l'IA n'en tire que la formulation de règles d'écriture.
+- **Règles proposées** : elles entrent dans le circuit des règles apprises, avec leur base chiffrée et leurs
+  preuves ; le propriétaire accepte, refuse ou retire, rien n'est accepté d'office.
+- **Plafond** de 20 règles de performance en place par compte.
+- CLI : `rules analyze`.
+- Case hebdomadaire : analyse planifiée (7 jours et 5 nouveaux posts publiés).
+
 ## V0.09 — 18 novembre 2026
 
 [PR n°9](https://github.com/AllanPoule/XGrowth-Studio/pull/9) · Glisser-déposer la file de publication

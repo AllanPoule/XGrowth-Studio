@@ -523,7 +523,9 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 			// Le plafond et la validation du texte ne visent que les règles
 			// de performance : les règles issues des retours gardent leur comportement.
 			if r.Source == RuleSourcePerformance {
-				if err := ruleTextOK(r.Text); err != nil {
+				// un texte retouché à la main reste soumis aux mêmes limites,
+				// chiffres compris : la règle est injectée dans chaque demande
+				if err := perfRuleTextOK(r.Text); err != nil {
 					return err
 				}
 				if acceptedPerfRules(d, r.Account) >= perfMaxAccepted {
