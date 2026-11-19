@@ -37,6 +37,16 @@ func NewClaudeAI(model, effort string) *claudeAI {
 	return &claudeAI{client: anthropic.NewClient(), model: model, effort: effort}
 }
 
+// wrapAPIError garde l'erreur du SDK dans la chaîne (%w) : aiErrorCategory en
+// lit le code HTTP.
+func wrapAPIError(err error) error {
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		return fmt.Errorf("API Claude : HTTP %d : %w", apiErr.StatusCode, apiErr)
+	}
+	return fmt.Errorf("API Claude : %w", err)
+}
+
 func (c *claudeAI) JSON(ctx context.Context, system, user string, schema map[string]any, out any) error {
 	resp, err := c.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(c.model),
@@ -52,11 +62,7 @@ func (c *claudeAI) JSON(ctx context.Context, system, user string, schema map[str
 		Fallbacks: anthropic.BetaFallbacksParamOfDefault(),
 	})
 	if err != nil {
-		var apiErr *anthropic.Error
-		if errors.As(err, &apiErr) {
-			return fmt.Errorf("API Claude : HTTP %d : %w", apiErr.StatusCode, apiErr)
-		}
-		return fmt.Errorf("API Claude : %w", err)
+		return wrapAPIError(err)
 	}
 	if resp.StopReason == anthropic.BetaStopReasonRefusal {
 		return errors.New("Claude a décliné cette demande")

@@ -19,12 +19,6 @@ type Studio struct {
 	ai         func(s Settings) AI
 	backendFor func(a *Account) (XBackend, error)
 	now        func() time.Time
-
-	// perfStorageAt : dernier échec d'écriture d'une analyse dans ce processus.
-	// Depuis que Store.Update ne bascule plus la mémoire avant l'écriture, un
-	// disque en panne ne retient plus l'état de l'analyse : sans ce garde, chaque
-	// Tick rappellerait l'IA. Touché par le seul Tick.
-	perfStorageAt time.Time
 }
 
 func NewStudio(store *Store) *Studio {
@@ -963,6 +957,14 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 	return updated, lastErr
 }
 
+// storageDown : le disque refuse l'écriture. L'état « fait » d'une étape IA
+// n'étant retenu qu'après une écriture réussie, chaque Tick rappellerait l'IA
+// pour rien. Une écriture à vide sert de sonde, seulement tant que la dernière
+// écriture a échoué.
+func (s *Studio) storageDown() bool {
+	return s.store.SaveFailing() && s.store.Update(func(*Data) error { return nil }) != nil
+}
+
 // Tick est un passage du planificateur : publication, veille, tri, statistiques.
 func (s *Studio) Tick(ctx context.Context) map[string]any {
 	out := map[string]any{"at": s.now().UTC()}
@@ -972,29 +974,36 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r
 	}
-	if r := s.TriagePending(ctx, "", true, false); len(r) > 0 {
-		out["triage"] = r
+	down := s.storageDown() // les étapes qui appellent l'IA attendent le retour du disque
+	if !down {
+		if r := s.TriagePending(ctx, "", true, false); len(r) > 0 {
+			out["triage"] = r
+		}
 	}
 	if r := s.PollSources(ctx, "", false); len(r) > 0 {
 		out["sources"] = r
 	}
-	if r := s.DraftNews(ctx); len(r) > 0 {
-		out["news"] = r
+	if !down {
+		if r := s.DraftNews(ctx); len(r) > 0 {
+			out["news"] = r
+		}
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
 	}
-	if r := s.RunCampaigns(ctx); len(r) > 0 {
-		out["campaigns"] = r
+	if !down {
+		if r := s.RunCampaigns(ctx); len(r) > 0 {
+			out["campaigns"] = r
+		}
 	}
-	if synthesisDue(s.store.Snapshot(), s.now()) {
+	if !down && synthesisDue(s.store.Snapshot(), s.now()) {
 		if r, err := s.Synthesize(ctx, ""); err == nil {
 			out["synthesis"] = r
 		} else {
 			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %s", aiErrorCategory(err)); return nil })
 		}
 	}
-	if due := perfDueAccounts(s.store.Snapshot(), s.now()); len(due) > 0 && (s.perfStorageAt.IsZero() || s.now().Sub(s.perfStorageAt) >= perfEvery) {
+	if due := perfDueAccounts(s.store.Snapshot(), s.now()); !down && len(due) > 0 {
 		r, err := s.analyzeAccounts(ctx, due)
 		var pe *perfError
 		switch {
@@ -1011,7 +1020,6 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		default:
 			// toute autre erreur vient du magasin (disque, data.json) : son message
 			// peut citer un chemin local, le journal n'en garde que la catégorie
-			s.perfStorageAt = s.now()
 			_ = s.store.Update(func(d *Data) error {
 				d.AddLog("error", "analyse des performances : stockage")
 				return nil

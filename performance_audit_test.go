@@ -385,12 +385,12 @@ func TestAuditC12SynthesisLogsOnlyTheErrorCategory(t *testing.T) {
 	}
 	e.tune(t, nil, func(s *Settings) { s.AutoSynthesis = true })
 	e.ai.err = func(string) error {
-		return errors.New("Claude Code : exit status 1 Error: cannot read /home/allan/.claude/settings.json (Request-ID: req_SECRET)")
+		return errors.New("Claude Code : exit status 1 Error: cannot read /home/user/.claude/settings.json (Request-ID: req_SECRET)")
 	}
 	e.st.Tick(context.Background())
 	found := false
 	for _, l := range e.st.store.Snapshot().Log {
-		if strings.Contains(l.Message, "/home/allan") || strings.Contains(l.Message, "req_SECRET") {
+		if strings.Contains(l.Message, "/home/user") || strings.Contains(l.Message, "req_SECRET") {
 			t.Fatalf("le journal garde le message brut du fournisseur : %q", l.Message)
 		}
 		if l.Message == "synthèse des retours : fournisseur indisponible" {
@@ -399,5 +399,93 @@ func TestAuditC12SynthesisLogsOnlyTheErrorCategory(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ligne de journal attendue « synthèse des retours : <catégorie> » : %+v", e.st.store.Snapshot().Log)
+	}
+}
+
+// Relecture : tant que le disque refuse l'écriture, aucune étape du Tick qui
+// appelle l'IA ne boucle. Le garde est commun (storageDown), un test par étape.
+func auditTicksWithBrokenDisk(t *testing.T, e *env, n int) {
+	t.Helper()
+	auditBreakWrites(t, filepath.Dir(e.st.store.path))
+	for i := 0; i < n; i++ {
+		e.now = e.now.Add(time.Minute)
+		e.st.Tick(context.Background())
+	}
+}
+
+func TestAuditStorageDownSynthesisCallsAIOnce(t *testing.T) {
+	e := newEnv(t)
+	for _, text := range []string{"un", "deux", "trois"} {
+		p := e.draft(t, text)
+		if _, err := e.st.Reject(p.ID, "trop de jargon"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoSynthesis = true })
+	e.ai.calls = 0
+	auditTicksWithBrokenDisk(t, e, 60)
+	if e.ai.calls != 1 {
+		t.Fatalf("appels IA de la synthèse, disque en panne, 60 Ticks : %d (attendu 1)", e.ai.calls)
+	}
+	// le disque revient : la sonde rouvre les étapes IA, la synthèse se refait
+	dir := filepath.Dir(e.st.store.path)
+	if err := os.Remove(filepath.Join(dir, "data.json.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Minute)
+	e.st.Tick(context.Background())
+	if e.ai.calls != 2 {
+		t.Fatalf("appels IA après le retour du disque : %d (attendu 2)", e.ai.calls)
+	}
+}
+
+func TestAuditStorageDownTriageCallsAIOnce(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.st.AddWatch("main", "user", "@source", 30); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Account("main").AutoTriage = true
+		return nil
+	})
+	e.x.feed = []Tweet{tw("1", "a", "Les agents IA en production")}
+	e.st.PollWatch(context.Background(), "", true)
+	e.ai.calls = 0
+	auditTicksWithBrokenDisk(t, e, 30)
+	if e.ai.calls != 1 {
+		t.Fatalf("appels IA du tri, disque en panne, 30 Ticks : %d (attendu 1)", e.ai.calls)
+	}
+}
+
+// C1 : emballage de l'erreur du SDK dans claudeAI.JSON (%w) : le code HTTP reste
+// lisible dans la chaîne.
+func TestAuditC1WrapAPIErrorKeepsTheSDKError(t *testing.T) {
+	err := wrapAPIError(&anthropic.Error{StatusCode: 429})
+	var sdk *anthropic.Error
+	if !errors.As(err, &sdk) || sdk.StatusCode != 429 {
+		t.Fatalf("l'erreur du SDK n'est plus dans la chaîne : %v", err)
+	}
+	if got := aiErrorCategory(&perfAIError{err}); got != "quota dépassé" {
+		t.Fatalf("catégorie %q (attendu « quota dépassé »)", got)
+	}
+}
+
+// C1 : le texte ne contient aucun motif « HTTP nnn » : seul le StatusCode du SDK
+// décide, même quand le texte pointe une autre catégorie.
+func TestAuditC1StatusCodeDecidesWhenTextHasNoPattern(t *testing.T) {
+	cases := []struct {
+		code int
+		text string
+		want string
+	}{
+		{429, "unauthorized", "quota dépassé"},
+		{401, "boom", "authentification"},
+		{500, "quota", "fournisseur indisponible"},
+	}
+	for _, c := range cases {
+		err := &perfAIError{fmt.Errorf("%s : %w", c.text, &anthropic.Error{StatusCode: c.code})}
+		if got := aiErrorCategory(err); got != c.want {
+			t.Errorf("code %d, texte %q : catégorie %q (attendu %q)", c.code, c.text, got, c.want)
+		}
 	}
 }

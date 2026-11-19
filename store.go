@@ -272,6 +272,8 @@ type Store struct {
 	mu      sync.Mutex
 	data    *Data
 	modTime time.Time
+	// saveFailing : voir SaveFailing
+	saveFailing bool
 }
 
 func homeDir() string {
@@ -473,10 +475,20 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	// la mémoire ne bascule qu'après l'écriture : en cas d'échec, mémoire et
 	// disque restent égaux à l'état d'avant
 	if err := s.save(work); err != nil {
+		s.saveFailing = true
 		return err
 	}
+	s.saveFailing = false
 	s.data = work
 	return nil
+}
+
+// SaveFailing : la dernière écriture de ce processus a échoué (disque plein ou
+// en panne). Remis à faux par la première écriture réussie.
+func (s *Store) SaveFailing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveFailing
 }
 
 // Snapshot renvoie une copie profonde (via JSON) pour la lire sans verrou.
