@@ -28,12 +28,28 @@ type Studio struct {
 	// processus. Elle est prise sans attendre (TryLock) : une seconde analyse
 	// est refusée (errPerfBusy), sans appel IA.
 	perfMu sync.Mutex
-	// perfSaveWait : après un échec d'écriture de l'analyse automatique, pas
-	// de nouvel essai automatique avant cette date (perfSaveRetry). Gardée en
-	// mémoire seulement, puisque le disque refuse l'écriture ; lue et écrite
-	// sous perfMu.
-	perfSaveWait time.Time
+	// saveWait : après un échec d'écriture de data.json, Tick ne refait pas
+	// d'appel X ni IA avant cette date (saveRetry), sauf si une écriture a
+	// réussi depuis. seenSaveFailures : nombre d'échecs d'écriture déjà pris
+	// en compte (Store.SaveFailures). Gardés en mémoire seulement, puisque le
+	// disque refuse l'écriture ; lus et écrits sous waitMu.
+	waitMu           sync.Mutex
+	saveWait         time.Time
+	seenSaveFailures uint64
 }
+
+// saveRetry : après un échec d'écriture de data.json, Tick saute pendant une
+// heure les étapes qui appellent X ou l'IA (veille, tri, sources, actualités,
+// statistiques, campagnes, synthèse, analyse des performances). Store.Update
+// ne garde pas en mémoire ce qui n'est pas enregistré : sans cette attente, ces
+// étapes oublieraient qu'elles viennent d'appeler X ou l'IA (date du dernier
+// relevé, du tri, recherches du jour d'une campagne, date d'analyse) et les
+// rappelleraient à chaque passage du planificateur tant que le disque refuse
+// l'écriture (disque plein, droits). Une heure, comme le premier nouvel essai
+// après une panne de l'IA (perfRetryFirst), laisse le temps de corriger le
+// disque sans payer un appel par minute. L'attente cesse dès qu'une écriture
+// réussit (Store.SaveFailures).
+const saveRetry = time.Hour
 
 func NewStudio(store *Store) *Studio {
 	return &Studio{
@@ -976,9 +992,16 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 
 // Tick est un passage du planificateur : publication, veille, tri, statistiques.
 func (s *Studio) Tick(ctx context.Context) map[string]any {
-	out := map[string]any{"at": s.now().UTC()}
+	now := s.now().UTC()
+	out := map[string]any{"at": now}
+	// sans attente : un post n'est envoyé qu'une fois sa réservation
+	// enregistrée, donc rien ne part tant que le disque refuse l'écriture
 	if r := s.PublishDue(ctx); len(r) > 0 {
 		out["published"] = r
+	}
+	defer s.noteSaveFailures(now)
+	if s.saveWaiting(now) {
+		return out
 	}
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r
@@ -1012,8 +1035,8 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		// son unique écriture.
 		// Si c'est cette écriture qui a échoué, le journal de data.json ne peut
 		// pas le dire : l'échec va au journal du processus, avec un message
-		// fixe qui ne recopie pas l'erreur, et Tick continue ; l'analyse
-		// automatique attend alors perfSaveRetry avant un nouvel essai. Si une
+		// fixe qui ne recopie pas l'erreur, et Tick continue ; les passages
+		// suivants attendent alors saveRetry (noteSaveFailures). Si une
 		// analyse est déjà en cours (errPerfBusy), Tick la saute sans écrire.
 		r, err := s.analyzePerformance(ctx, "", true)
 		switch {
@@ -1024,4 +1047,29 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		}
 	}
 	return out
+}
+
+// saveWaiting : Tick attend après un échec d'écriture (saveRetry), sauf si la
+// dernière écriture a réussi depuis.
+func (s *Studio) saveWaiting(now time.Time) bool {
+	s.waitMu.Lock()
+	defer s.waitMu.Unlock()
+	_, failing := s.store.SaveFailures()
+	return failing && now.Before(s.saveWait)
+}
+
+// noteSaveFailures : si une écriture a échoué depuis le dernier passage (dans
+// Tick ou ailleurs), Tick attend saveRetry. Le journal du processus le dit une
+// fois par attente, avec un message fixe : celui de data.json ne peut pas
+// l'enregistrer.
+func (s *Studio) noteSaveFailures(now time.Time) {
+	s.waitMu.Lock()
+	defer s.waitMu.Unlock()
+	n, _ := s.store.SaveFailures()
+	if n == s.seenSaveFailures {
+		return
+	}
+	s.seenSaveFailures = n
+	s.saveWait = now.Add(saveRetry)
+	s.logf("échec d'écriture de data.json : veille, tri, statistiques, campagnes et analyses en pause pendant %d min", int(saveRetry/time.Minute))
 }

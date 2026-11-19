@@ -69,14 +69,6 @@ const (
 	// appelé qu'une fois par jour pour ce compte, soit 5 appels les premières
 	// 24 h (à 0, 1, 3, 7 et 15 h), au lieu d'un par passage du planificateur.
 	perfRetryMax = 24 * time.Hour
-	// Après un échec d'écriture de data.json par l'analyse automatique, pas de
-	// nouvel essai automatique avant une heure : rien n'ayant été enregistré,
-	// l'analyse resterait due et rappellerait l'IA à chaque passage du
-	// planificateur tant que le disque refuse l'écriture (disque plein, droits).
-	// Une heure, comme le premier nouvel essai après une panne de l'IA
-	// (perfRetryFirst), suffit à corriger le disque sans payer un appel par
-	// minute. L'attente est gardée en mémoire (Studio.perfSaveWait).
-	perfSaveRetry = time.Hour
 )
 
 // perfRetryDelay : attente avant le nouvel essai automatique d'un compte après
@@ -469,9 +461,6 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 	}
 	defer s.perfMu.Unlock()
 	now := s.now().UTC()
-	if auto && now.Before(s.perfSaveWait) {
-		return &PerfResult{Accounts: []*PerfAccountResult{}}, nil // disque en échec : on attend
-	}
 	d := s.store.Snapshot()
 	var accounts []*Account
 	if account != "" {
@@ -668,11 +657,8 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		return nil
 	})
 	if err != nil {
-		// rien n'est enregistré, ni en mémoire (Store.Update) : sans attente,
-		// l'analyse automatique resterait due à chaque passage
-		if auto {
-			s.perfSaveWait = now.Add(perfSaveRetry)
-		}
+		// rien n'est enregistré, ni en mémoire (Store.Update) : l'analyse
+		// automatique reste due ; Tick attend saveRetry avant un nouvel essai
 		return nil, fmt.Errorf("%w : %w", errPerfSave, err)
 	}
 	if allFailed {

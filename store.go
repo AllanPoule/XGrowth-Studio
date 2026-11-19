@@ -287,6 +287,11 @@ type Store struct {
 	mu      sync.Mutex
 	data    *Data
 	modTime time.Time
+	// saveFailures : nombre d'écritures de Update en échec depuis
+	// l'ouverture ; saveFailing : la dernière a échoué (remis à faux dès
+	// qu'une écriture réussit). En mémoire seulement : voir Studio.saveWait.
+	saveFailures uint64
+	saveFailing  bool
 }
 
 func homeDir() string {
@@ -450,9 +455,20 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	s.data = work
 	if err := s.save(); err != nil {
 		s.data = old
+		s.saveFailures++
+		s.saveFailing = true
 		return err
 	}
+	s.saveFailing = false
 	return nil
+}
+
+// SaveFailures renvoie le nombre d'écritures en échec depuis l'ouverture et si
+// la dernière écriture a échoué.
+func (s *Store) SaveFailures() (n uint64, failing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveFailures, s.saveFailing
 }
 
 // Snapshot renvoie une copie profonde (via JSON) pour la lire sans verrou.

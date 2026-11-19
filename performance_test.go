@@ -2290,7 +2290,7 @@ func TestStoreUpdateRestoresMemoryWhenSaveFails(t *testing.T) {
 // LOT1-T10, critère 2 : le disque refuse toute écriture pendant 2 h et le
 // planificateur passe toutes les 60 s (121 passages, de 0 à 120 min). Sans
 // attente, l'analyse, jamais enregistrée, resterait due et appellerait l'IA à
-// chaque passage (121 appels) ; avec perfSaveRetry, 3 appels seulement, à 0,
+// chaque passage (121 appels) ; avec saveRetry (Tick), 3 appels seulement, à 0,
 // 60 et 120 min. Le disque rétabli, le passage suivant l'attente enregistre.
 func TestPerfAutoAnalysisWaitsAfterSaveFailure(t *testing.T) {
 	ctx := context.Background()
