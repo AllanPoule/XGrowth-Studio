@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -24,10 +23,6 @@ type Studio struct {
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
-	// perfMu : une seule analyse des performances à la fois dans ce
-	// processus. Elle est prise sans attendre (TryLock) : une seconde analyse
-	// est refusée (errPerfBusy), sans appel IA.
-	perfMu sync.Mutex
 }
 
 func NewStudio(store *Store) *Studio {
@@ -1010,7 +1005,8 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		// fixe qui ne recopie pas l'erreur, et Tick continue : l'analyse est
 		// gardée en mémoire (Store.Update) et sera enregistrée par la prochaine
 		// écriture réussie, sans nouvel appel IA d'ici là. Si une analyse est
-		// déjà en cours (errPerfBusy), Tick la saute sans écrire.
+		// déjà en cours, dans ce processus ou dans un autre (errPerfBusy),
+		// Tick la saute sans écrire.
 		r, err := s.analyzePerformance(ctx, "", true)
 		switch {
 		case err == nil:

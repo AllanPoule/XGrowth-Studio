@@ -16,8 +16,8 @@ dernière version.
   celle du compte, ou au plus deux tiers.
 - L'IA propose au plus 3 règles d'écriture par compte et par analyse, chacune appuyée sur un de ces groupes. Le
   studio écrit lui-même la base chiffrée de la règle, affichée sous son texte avec l'étiquette « performances ».
-  Une règle déjà proposée, en place, refusée ou retirée n'est pas reproposée. Sans assez de posts mesurés, sans
-  groupe qui se détache ou au plafond de règles, aucun appel IA.
+  Une règle déjà proposée, en place, refusée ou retirée pour ce compte (ou pour tous) n'est pas reproposée. Sans
+  assez de posts mesurés, sans groupe qui se détache ou au plafond de règles, aucun appel IA.
 - **Réglages › Règles apprises** : bouton « Analyser les performances » et case « Analyse hebdomadaire des
   performances ».
 - **Analyse hebdomadaire**, facultative et désactivée par défaut : le planificateur la lance quand la précédente
