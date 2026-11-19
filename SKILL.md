@@ -72,6 +72,7 @@ rewrite <id> --feedback "shorter, one idea" Claude rewrites; the feedback become
 reject <id> --reason "why"                 the reason becomes a lesson
 learn "lesson" [--account a]
 rules synthesize [--account a]             the AI turns unsynthesized feedback into proposed rules
+rules analyze [--account a]                the AI turns measured post performance into proposed rules
 ideas [--account a] [--status proposed|kept|dismissed|drafted]
 ideas suggest <account>                    the AI proposes original post ideas (idea bank must be on)
 ideas draft <id>                           drafts the post of an idea (it waits for validation)
@@ -87,14 +88,18 @@ account set <account> [--goals "..."] [--length court|moyen|long] [--examples-fi
                       [--post-types JSON|@file.json|defaut] [--ideas-prompt|--item-prompt|--reply-prompt
                       |--quote-prompt|--rewrite-prompt|--visual-guide "..."]   (empty = inherit)
 settings [--rules-file rules.txt] [--post-types ...] [--<kind>-prompt "..."] [--visual-guide "..."]
+         [--rules-auto-accept[=false]] [--auto-synthesis[=false]] [--auto-perf-analysis[=false]]
 ```
+
+`--auto-perf-analysis` turns on the weekly performance analysis (off by default). Performance rules are always
+proposed, never applied automatically, even with `--rules-auto-accept`.
 
 Drafts may contain `[À COMPLÉTER : …]` markers where real experience or figures are needed: never fill them with
 invented content. Validation refuses them; tell the human which drafts need their input. Keeping or dismissing an
 idea (`ideas keep|dismiss`) and categorizing feedback (`learnings set`) are the human's choices too.
 
-Never accept, refuse or revoke a learned rule yourself (`rules accept|refuse|revoke`): like validation, it is the
-human's decision. Tell them which rules wait in Settings.
+Never accept, refuse or revoke a learned rule yourself (`rules accept|refuse|revoke`), whether it comes from
+feedback or from performance: like validation, it is the human's decision. Tell them which rules wait in Settings.
 
 Drafts must pass the guard before a human can validate them: no competitor names (`settings`), no banned phrases,
 280 characters max (4000 for Premium accounts), no exact repeat of a published post. Fix a failing draft with

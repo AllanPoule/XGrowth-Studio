@@ -4,6 +4,33 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## V0.10 — 19 novembre 2026
+
+[PR n°16](https://github.com/AllanPoule/XGrowth-Studio/pull/16) · Mémoire persistante et auto-amélioration : lot 1
+
+### Ajouté
+- **Analyse des performances** : le studio calcule lui-même, sans IA, le taux d'engagement médian du compte et
+  celui des groupes de posts (type de post ; post, réponse ou citation ; longueur ; tiré de la veille ou non). Seuls
+  comptent les posts réellement publiés (hors simulation), mesurés au moins 48 h après leur publication et vus au moins 50 fois. Il faut 8 de ces posts pour
+  lancer une analyse ; un groupe est retenu s'il compte au moins 3 posts et si sa médiane vaut au moins 1,5 fois
+  celle du compte, ou au plus deux tiers.
+- L'IA propose au plus 3 règles d'écriture par compte et par analyse, chacune appuyée sur un de ces groupes. Le
+  studio écrit lui-même la base chiffrée de la règle, affichée sous son texte avec l'étiquette « performances ».
+  Une règle déjà proposée, en place, refusée ou retirée n'est pas reproposée. Sans assez de posts mesurés, sans
+  groupe qui se détache ou au plafond de règles, aucun appel IA.
+- **Réglages › Règles apprises** : bouton « Analyser les performances » et case « Analyse hebdomadaire des
+  performances ».
+- **Analyse hebdomadaire**, facultative et désactivée par défaut : le planificateur la lance quand la précédente
+  date d'au moins 7 jours et qu'au moins 5 nouveaux posts ont été publiés depuis.
+- CLI : `rules analyze [--account c]` et `settings --auto-perf-analysis[=false]`. API : `POST /api/rules/analyze`.
+
+### Modifié
+- Les règles de performance restent toujours « proposées » : elles ne sont jamais acceptées d'office, même avec
+  « Appliquer d'office les règles proposées ». Une fois acceptées, elles guident chaque demande comme les autres
+  règles apprises.
+- **Plafond de 20 règles de performance en place par compte** : au-delà, accepter ou remettre une règle de
+  performance est refusé tant qu'on n'en a pas retiré une. Les règles tirées des retours ne sont pas concernées.
+
 ## V0.09 — 18 novembre 2026
 
 [PR n°9](https://github.com/AllanPoule/XGrowth-Studio/pull/9) · Glisser-déposer la file de publication
