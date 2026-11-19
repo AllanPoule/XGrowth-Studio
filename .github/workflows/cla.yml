@@ -27,5 +27,8 @@ jobs:
           path-to-document: "https://github.com/AllanPoule/XGrowth-Studio/blob/main/CLA.md"
           # Signatures are stored on a dedicated branch so that main can stay protected
           branch: "cla-signatures"
-          allowlist: "AllanPoule,dependabot[bot],github-actions[bot]"
+          # Allan and his own agents (OpenBot, Claude) do not need to sign the CLA:
+          # their work belongs to the project owner. "*(OpenBot)" matches commit
+          # author names such as "Louis (OpenBot)" that are not linked to a GitHub account.
+          allowlist: "AllanPoule,claude,openbotgit[bot],*(OpenBot),dependabot[bot],github-actions[bot]"
           lock-pullrequest-aftermerge: false
