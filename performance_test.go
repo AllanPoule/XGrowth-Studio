@@ -388,6 +388,21 @@ func TestRuleTextOKInvisibleCharsFromHermes(t *testing.T) {
 	}
 }
 
+// Audit A10 (LOT1-T11) : la marque de lettre arabe U+061C est un contrôle de
+// direction (Bidi_Control), comme U+200E et U+200F : elle est refusée dans
+// une règle. Ses voisins visibles (point-virgule et point d'interrogation
+// arabes) restent permis.
+func TestRuleTextOKRejectsArabicLetterMark(t *testing.T) {
+	if err := ruleTextOK("Privilégie une accroche؜ concrète."); err == nil || err.Error() != "caractère invisible" {
+		t.Fatalf("U+061C (ARABIC LETTER MARK) : %v, attendu « caractère invisible »", err)
+	}
+	for _, r := range []rune{0x061B, 0x061F} {
+		if err := ruleTextOK("Privilégie" + string(r) + " les listes"); err != nil {
+			t.Errorf("U+%04X visible refusé : %v", r, err)
+		}
+	}
+}
+
 func TestHasDigit(t *testing.T) {
 	for text, want := range map[string]bool{
 		"\u00c9cris trois lignes":          false,

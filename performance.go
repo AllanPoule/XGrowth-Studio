@@ -228,10 +228,14 @@ func ComputePerfDigest(d *Data, account string, now time.Time) PerfDigest {
 // recopie l'ASCII sans rien afficher : « ASCII smuggling »), plus les marques
 // de direction U+200E et U+200F déjà refusées ici. Les drapeaux régionaux, seul
 // usage légitime des TAG, ne sont pas exemptés : une règle n'en a pas besoin.
+// La marque de lettre arabe U+061C est un ajout propre au studio, absent du
+// jeu de Hermes : c'est un contrôle de direction de la même famille
+// (Bidi_Control) que U+200E et U+200F (audit A10).
 // adapté de hermes-agent : tools/threat_patterns.py@05348a3 (INVISIBLE_CHARS)
 func invisibleRune(r rune) bool {
 	switch {
-	case r >= 0x200B && r <= 0x200F, // largeur nulle, jointures, marques LRM et RLM
+	case r == 0x061C, // marque de lettre arabe (ALM), ajout du studio
+		r >= 0x200B && r <= 0x200F,   // largeur nulle, jointures, marques LRM et RLM
 		r >= 0x202A && r <= 0x202E,   // enchâssements et forçages de direction
 		r == 0x2060,                  // gluon de mots
 		r >= 0x2062 && r <= 0x2064,   // multiplication, séparateur et plus invisibles
