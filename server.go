@@ -289,15 +289,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/accounts/{name}/remove", func(r *http.Request, b map[string]any) (any, error) {
 		name := r.PathValue("name")
-		return nil, st.store.Update(func(d *Data) error {
-			for i, a := range d.Accounts {
-				if strings.EqualFold(a.Name, name) {
-					d.Accounts = append(d.Accounts[:i], d.Accounts[i+1:]...)
-					return nil
-				}
-			}
-			return fmt.Errorf("compte %q inconnu", name)
-		})
+		return nil, st.store.Update(func(d *Data) error { return d.RemoveAccount(name) })
 	})
 	post("/api/watch", func(r *http.Request, b map[string]any) (any, error) {
 		return st.AddWatch(s(b, "account"), s(b, "kind"), s(b, "value"), n(b, "every", 60))

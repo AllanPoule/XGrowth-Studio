@@ -19,6 +19,12 @@ type Studio struct {
 	ai         func(s Settings) AI
 	backendFor func(a *Account) (XBackend, error)
 	now        func() time.Time
+
+	// perfStorageAt : dernier échec d'écriture d'une analyse dans ce processus.
+	// Depuis que Store.Update ne bascule plus la mémoire avant l'écriture, un
+	// disque en panne ne retient plus l'état de l'analyse : sans ce garde, chaque
+	// Tick rappellerait l'IA. Touché par le seul Tick.
+	perfStorageAt time.Time
 }
 
 func NewStudio(store *Store) *Studio {
@@ -985,10 +991,10 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		if r, err := s.Synthesize(ctx, ""); err == nil {
 			out["synthesis"] = r
 		} else {
-			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %v", err); return nil })
+			_ = s.store.Update(func(d *Data) error { d.AddLog("error", "synthèse des retours : %s", aiErrorCategory(err)); return nil })
 		}
 	}
-	if due := perfDueAccounts(s.store.Snapshot(), s.now()); len(due) > 0 {
+	if due := perfDueAccounts(s.store.Snapshot(), s.now()); len(due) > 0 && (s.perfStorageAt.IsZero() || s.now().Sub(s.perfStorageAt) >= perfEvery) {
 		r, err := s.analyzeAccounts(ctx, due)
 		var pe *perfError
 		switch {
@@ -1005,6 +1011,7 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 		default:
 			// toute autre erreur vient du magasin (disque, data.json) : son message
 			// peut citer un chemin local, le journal n'en garde que la catégorie
+			s.perfStorageAt = s.now()
 			_ = s.store.Update(func(d *Data) error {
 				d.AddLog("error", "analyse des performances : stockage")
 				return nil

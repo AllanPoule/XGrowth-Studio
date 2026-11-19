@@ -450,7 +450,7 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 	u.WriteString("\nPropose les règles (zéro si rien ne se dégage).")
 	var out synthesisOut
 	if err := s.aiFor(d.Account(account)).JSON(ctx, synthesisSystem, u.String(), synthesisSchema, &out); err != nil {
-		return nil, err
+		return nil, &perfAIError{err} // le journal du Tick n'en garde que la catégorie
 	}
 	now := s.now().UTC()
 	res := &SynthesisResult{Examined: len(batch)}

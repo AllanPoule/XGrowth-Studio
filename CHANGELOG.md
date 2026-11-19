@@ -16,6 +16,18 @@ dernière version.
 - **Plafond** de 20 règles de performance en place par compte.
 - CLI : `rules analyze`.
 - Case hebdomadaire : analyse planifiée par compte (7 jours depuis son dernier succès et 5 de ses posts devenus éligibles ; reprise après 6 h en cas d'erreur passagère).
+- Un compte qui a déjà 3 propositions de performance en attente est sauté, sans appel IA : décidez-les d'abord.
+- Un verrou de fichier (`.analyse.lock`, à côté de `data.json`) empêche `xgrowth serve` et la CLI d'analyser en même temps.
+
+### Corrigé
+- Le classement des erreurs de l'IA lit le code HTTP du fournisseur, plus un nombre égaré dans un identifiant de requête.
+- `rules analyze` et `/api/rules/analyze` ne renvoient plus le chemin local d'une erreur d'écriture : la catégorie « stockage » seule.
+- `Store.Update` ne remplace plus la mémoire avant d'avoir écrit `data.json` : en cas d'échec, mémoire et disque restent identiques.
+- Supprimer un compte supprime aussi son état d'analyse.
+- Le journal de la synthèse des retours ne garde que la catégorie de l'erreur, pas le message brut du fournisseur.
+
+### Migration
+- Données en v3 : l'ancien horodatage global de l'analyse sert de dernier succès à chaque compte déjà présent.
 
 ## V0.09 — 18 novembre 2026
 

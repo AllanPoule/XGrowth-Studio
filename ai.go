@@ -54,7 +54,7 @@ func (c *claudeAI) JSON(ctx context.Context, system, user string, schema map[str
 	if err != nil {
 		var apiErr *anthropic.Error
 		if errors.As(err, &apiErr) {
-			return fmt.Errorf("API Claude : HTTP %d : %s", apiErr.StatusCode, apiErr.Error())
+			return fmt.Errorf("API Claude : HTTP %d : %w", apiErr.StatusCode, apiErr)
 		}
 		return fmt.Errorf("API Claude : %w", err)
 	}

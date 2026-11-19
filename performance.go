@@ -14,12 +14,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/anthropics/anthropic-sdk-go/v2"
 )
 
 // Seuils de l'analyse des performances. Regroupés ici et volontairement non
@@ -324,7 +330,29 @@ var (
 	// Tick, CLI de serve) ; une seconde demande n'appelle pas l'IA.
 	perfBusy    sync.Mutex
 	errPerfBusy = errors.New("analyse déjà en cours")
+	// errPerfStorage : l'écriture de data.json a échoué. Le message du système
+	// de fichiers cite un chemin local : il ne sort jamais, ni par l'API ni par
+	// la CLI.
+	errPerfStorage = errors.New("analyse des performances : stockage")
 )
+
+// lockAnalysis prend le verrou de fichier de l'analyse (à côté de data.json),
+// non bloquant : deux processus (serve et CLI) n'analysent pas en même temps.
+// Le verrou du magasin, lui, ne dure que le temps d'un Update.
+func lockAnalysis(dir string) (unlock func(), err error) {
+	f, err := os.OpenFile(filepath.Join(dir, ".analyse.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errPerfBusy
+		}
+		return nil, err
+	}
+	return func() { f.Close() }, nil // la fermeture libère le verrou
+}
 
 // perfAIError : erreur du fournisseur IA, à distinguer d'une erreur du magasin
 // pour la classer (aiErrorCategory).
@@ -379,6 +407,14 @@ func (s *Studio) analyzeAccounts(ctx context.Context, names []string) (*PerfResu
 		return nil, errPerfBusy
 	}
 	defer perfBusy.Unlock()
+	unlock, err := lockAnalysis(filepath.Dir(s.store.path))
+	if err != nil {
+		if err == errPerfBusy {
+			return nil, err
+		}
+		return nil, errPerfStorage
+	}
+	defer unlock()
 	res := &PerfResult{Accounts: make([]PerfAccountResult, 0, len(names))}
 	attempted, failed, kind := 0, 0, ""
 	for _, name := range names {
@@ -395,6 +431,9 @@ func (s *Studio) analyzeAccounts(ctx context.Context, names []string) (*PerfResu
 			continue
 		case acceptedPerfRules(d, name) >= perfMaxAccepted:
 			r.Skipped = fmt.Sprintf("%d règles de performance déjà en place : retirez-en une d'abord", perfMaxAccepted)
+			continue
+		case pendingPerfRules(d, name) >= perfMaxProposals:
+			r.Skipped = "décidez d'abord des propositions en attente"
 			continue
 		}
 		var out perfOut
@@ -420,7 +459,7 @@ func (s *Studio) analyzeAccounts(ctx context.Context, names []string) (*PerfResu
 		}
 		if uerr != nil {
 			r.Proposed = []*RuleProposal{}
-			return res, uerr
+			return res, errPerfStorage
 		}
 	}
 	if attempted > 0 && failed == attempted {
@@ -514,6 +553,18 @@ func acceptedPerfRules(d *Data, account string) int {
 	return n
 }
 
+// pendingPerfRules : règles de performance proposées, pas encore décidées, qui
+// concernent ce compte (les siennes et les règles communes).
+func pendingPerfRules(d *Data, account string) int {
+	n := 0
+	for _, r := range d.RuleProposals {
+		if r.Source == RuleSourcePerformance && r.Status == RuleProposed && ruleInScope(r, account) {
+			n++
+		}
+	}
+	return n
+}
+
 // perfCapReached : accepter cette règle de performance dépasserait le plafond.
 // Une règle de compte compte pour ce compte ; une règle commune compte pour
 // tous, donc un seul compte au plafond la refuse.
@@ -536,12 +587,37 @@ func perfCapReached(d *Data, r *RuleProposal) bool {
 // l'API et la CLI gardent. Le message brut peut citer un texte de post, un
 // compte ou une clé : il ne sort jamais d'ici. Une erreur qui n'est pas celle du
 // fournisseur (magasin : disque plein, data.json illisible) est un « stockage ».
+var statusInText = regexp.MustCompile(`(?:http|status|code)[ :]+(\d{3})\b`)
+
 func aiErrorCategory(err error) string {
 	var pe *perfAIError
 	if !errors.As(err, &pe) {
 		return "stockage"
 	}
+	// le code HTTP du SDK fait foi : le Request-ID et le corps du message
+	// peuvent contenir « 401 » sans que ce soit le statut
+	var apiErr *anthropic.Error
+	if errors.As(pe.err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 401, 403:
+			return "authentification"
+		case 429:
+			return "quota dépassé"
+		case 408, 504:
+			return "délai dépassé"
+		}
+		return "fournisseur indisponible"
+	}
 	m := strings.ToLower(pe.err.Error())
+	// un code seul n'est pas un statut : il faut son préfixe (« HTTP 401 »)
+	if mm := statusInText.FindStringSubmatch(m); mm != nil {
+		switch mm[1] {
+		case "401", "403":
+			return "authentification"
+		case "429":
+			return "quota dépassé"
+		}
+	}
 	has := func(subs ...string) bool {
 		for _, x := range subs {
 			if strings.Contains(m, x) {
@@ -551,9 +627,9 @@ func aiErrorCategory(err error) string {
 		return false
 	}
 	switch {
-	case has("401", "403", "unauthorized", "forbidden", "x-api-key", "api key", "clé api", "clé d'api", "authentication", "not logged in", "/login"):
+	case has("unauthorized", "forbidden", "x-api-key", "api key", "clé api", "clé d'api", "authentication", "not logged in", "/login"):
 		return "authentification"
-	case has("quota", "rate limit", "429", "limite"):
+	case has("quota", "rate limit", "rate_limit", "limite"):
 		return "quota dépassé"
 	case has("délai", "deadline", "timeout", "timed out", "n'a pas répondu"):
 		return "délai dépassé"

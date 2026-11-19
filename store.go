@@ -306,7 +306,7 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	if s.data == nil {
 		s.data = &Data{Version: dataVersion, Settings: defaultSettings()}
-		return s, s.save()
+		return s, s.save(s.data)
 	}
 	if b, err := os.ReadFile(s.path); err == nil {
 		var head struct {
@@ -314,7 +314,7 @@ func OpenStore(dir string) (*Store, error) {
 		}
 		// la migration a eu lieu en mémoire : on l'écrit tout de suite
 		if json.Unmarshal(b, &head) == nil && head.Version < dataVersion {
-			if err := s.save(); err != nil {
+			if err := s.save(s.data); err != nil {
 				return nil, err
 			}
 		}
@@ -395,6 +395,19 @@ func migrate(d *Data) bool {
 	return true
 }
 
+// RemoveAccount supprime le compte et son état d'analyse : un compte recréé sous
+// le même nom repart de zéro.
+func (d *Data) RemoveAccount(name string) error {
+	for i, a := range d.Accounts {
+		if strings.EqualFold(a.Name, name) {
+			d.Accounts = append(d.Accounts[:i], d.Accounts[i+1:]...)
+			delete(d.PerfStates, perfKey(a.Name))
+			return nil
+		}
+	}
+	return fmt.Errorf("compte %q inconnu", name)
+}
+
 // perfState renvoie l'état d'analyse du compte, créé au besoin (écriture : à
 // appeler dans un Update).
 func (d *Data) perfState(account string) *PerfState {
@@ -409,8 +422,10 @@ func (d *Data) perfState(account string) *PerfState {
 	return st
 }
 
-func (s *Store) save() error {
-	b, err := json.MarshalIndent(s.data, "", "  ")
+// save écrit data.json. Il ne touche pas à s.data : l'appelant ne remplace la
+// mémoire qu'après une écriture réussie.
+func (s *Store) save(d *Data) error {
+	b, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -455,8 +470,13 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if err := fn(work); err != nil {
 		return err
 	}
+	// la mémoire ne bascule qu'après l'écriture : en cas d'échec, mémoire et
+	// disque restent égaux à l'état d'avant
+	if err := s.save(work); err != nil {
+		return err
+	}
 	s.data = work
-	return s.save()
+	return nil
 }
 
 // Snapshot renvoie une copie profonde (via JSON) pour la lire sans verrou.
