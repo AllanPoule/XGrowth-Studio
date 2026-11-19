@@ -562,3 +562,18 @@ func (d *Data) TopPerformers(account string, max int) []*Post {
 	}
 	return ps
 }
+
+// RemoveAccount supprime le compte et son état d'analyse (Settings.PerfState) :
+// un compte recréé sous le même nom repart de zéro, sans hériter de l'ancienne
+// date ni de l'ancien délai d'attente. Le nom se compare sans tenir compte de
+// la casse.
+func (d *Data) RemoveAccount(name string) error {
+	for i, a := range d.Accounts {
+		if strings.EqualFold(a.Name, name) {
+			d.Accounts = append(d.Accounts[:i], d.Accounts[i+1:]...)
+			delete(d.Settings.PerfState, perfKey(a.Name))
+			return nil
+		}
+	}
+	return fmt.Errorf("compte %q inconnu", name)
+}

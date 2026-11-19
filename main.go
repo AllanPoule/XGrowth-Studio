@@ -851,15 +851,8 @@ func cmdAccount(st *Studio, a args) {
 		emit(acc)
 	case "remove":
 		name := need(a, 1, "account remove <nom>")
-		check(st.store.Update(func(d *Data) error {
-			for i, acc := range d.Accounts {
-				if strings.EqualFold(acc.Name, name) {
-					d.Accounts = append(d.Accounts[:i], d.Accounts[i+1:]...)
-					return nil
-				}
-			}
-			return fmt.Errorf("compte %q inconnu", name)
-		}))
+		check(st.store.Update(func(d *Data) error { return d.RemoveAccount(name) }))
+
 		emit(map[string]string{"removed": name})
 	default:
 		fail("invalid_input", fmt.Errorf("usage : xgrowth account add|set|check|list|show|remove"))
