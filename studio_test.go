@@ -634,73 +634,87 @@ func (c countX) Tweet(ctx context.Context, id string) (*Tweet, error) {
 	return c.fakeX.Tweet(ctx, id)
 }
 
-// LOT1-T10 : Store.Update ne garde plus en mémoire ce qui n'est pas
-// enregistré ; la veille (LastPolled), le tri (TriagedAt), les statistiques et
-// les campagnes (SearchesDone, dernier passage) ne retiennent donc plus, disque
-// en échec, qu'ils viennent d'appeler X ou l'IA. Sans attente, chaque passage
-// du planificateur refaisait ces appels (10 recherches X en 10 min mesurées en
-// relecture). Avec saveRetry, Tick saute ces étapes pendant une heure après un
-// échec d'écriture : disque en panne 2 h, un passage par minute, les appels X
-// et IA n'ont lieu qu'à 0, 60 et 120 min.
-func TestTickWaitsAfterSaveFailure(t *testing.T) {
+// LOT1-T12 (inverse le test LOT1-T10 qui figeait la pause du planificateur
+// après un échec d'écriture) : Store.Update garde en mémoire ce que le disque
+// refuse, donc la veille (LastPolled), le tri (TriagedAt), les statistiques et
+// les campagnes retiennent qu'ils viennent d'appeler X ou l'IA. Disque en échec
+// pendant 2 h, un passage par minute : exactement les mêmes appels X et IA, aux
+// mêmes instants, qu'avec un disque sain. Le disque rétabli, la prochaine
+// écriture réussie enregistre la veille et le tri.
+func TestTickDiskFailureMakesNoExtraCalls(t *testing.T) {
 	ctx := context.Background()
-	e := newEnv(t)
-	xCalls := 0
-	e.st.backendFor = func(*Account) (XBackend, error) { return countX{e.x, &xCalls}, nil }
-	if _, err := e.st.AddWatch("main", "user", "@source", 60); err != nil {
-		t.Fatal(err)
+	type run struct {
+		at      []time.Duration
+		x, ai   int
+		e       *env
+		restore func()
+		start   time.Time
 	}
-	if _, err := e.st.SaveCampaign(testCampaign()); err != nil {
-		t.Fatal(err)
-	}
-	_ = e.st.store.Update(func(d *Data) error {
-		a := d.Account("main")
-		a.AutoTriage, a.AutoDraft = true, true
-		return nil
-	})
-	e.x.feed = []Tweet{
-		feedTweet("1", "alice", "Je galère : mon agent a modifié des fichiers et je ne sais pas lesquels", 120),
-		feedTweet("2", "bob", "Les agents IA en production", 300),
-	}
-	// des contenus de veille enregistrés, à trier par l'IA
-	if r := e.st.PollWatch(ctx, "", true); len(r) != 1 || r[0].Added != 2 {
-		t.Fatalf("prérequis, veille : %+v", r)
-	}
-	xCalls, e.ai.calls = 0, 0
-	var logs int
-	e.st.logf = func(string, ...any) { logs++ }
-	restore := breakSave(t, e.st.store.path)
-	start := e.now
-	var at []time.Duration
-	for m := 0; m <= 120; m++ {
-		e.now = start.Add(time.Duration(m) * time.Minute)
-		nx, nai := xCalls, e.ai.count()
-		e.st.Tick(ctx)
-		if xCalls > nx || e.ai.count() > nai {
-			at = append(at, e.now.Sub(start))
+	scenario := func(broken bool) run {
+		e := newEnv(t)
+		xCalls := 0
+		e.st.backendFor = func(*Account) (XBackend, error) { return countX{e.x, &xCalls}, nil }
+		if _, err := e.st.AddWatch("main", "user", "@source", 60); err != nil {
+			t.Fatal(err)
 		}
+		if _, err := e.st.SaveCampaign(testCampaign()); err != nil {
+			t.Fatal(err)
+		}
+		_ = e.st.store.Update(func(d *Data) error {
+			a := d.Account("main")
+			a.AutoTriage, a.AutoDraft = true, true
+			return nil
+		})
+		e.x.feed = []Tweet{
+			feedTweet("1", "alice", "Je galère : mon agent a modifié des fichiers et je ne sais pas lesquels", 120),
+			feedTweet("2", "bob", "Les agents IA en production", 300),
+		}
+		// des contenus de veille enregistrés, à trier par l'IA
+		if r := e.st.PollWatch(ctx, "", true); len(r) != 1 || r[0].Added != 2 {
+			t.Fatalf("prérequis, veille : %+v", r)
+		}
+		xCalls, e.ai.calls = 0, 0
+		e.st.logf = func(string, ...any) {}
+		r := run{e: e, restore: func() {}, start: e.now}
+		if broken {
+			r.restore = breakSave(t, e.st.store.path)
+		}
+		for m := 0; m <= 120; m++ {
+			e.now = r.start.Add(time.Duration(m) * time.Minute)
+			nx, nai := xCalls, e.ai.count()
+			e.st.Tick(ctx)
+			if xCalls > nx || e.ai.count() > nai {
+				r.at = append(r.at, e.now.Sub(r.start))
+			}
+		}
+		r.x, r.ai = xCalls, e.ai.count()
+		return r
 	}
-	t.Logf("disque en échec 2 h, 121 passages : %d appel(s) X, %d appel(s) IA, aux instants %v", xCalls, e.ai.count(), at)
-	if want := []time.Duration{0, time.Hour, 2 * time.Hour}; !reflect.DeepEqual(at, want) {
-		t.Fatalf("disque en échec pendant 2 h, un passage par minute : appels X ou IA aux instants %v, attendu %v (%d X, %d IA)",
-			at, want, xCalls, e.ai.count())
+	ok, ko := scenario(false), scenario(true)
+	t.Logf("2 h, 121 passages : disque sain %d X, %d IA aux instants %v ; disque en échec %d X, %d IA aux instants %v",
+		ok.x, ok.ai, ok.at, ko.x, ko.ai, ko.at)
+	if ko.x == 0 || ko.ai == 0 || ko.x != ok.x || ko.ai != ok.ai || !reflect.DeepEqual(ko.at, ok.at) {
+		t.Fatalf("disque en échec : %d X et %d IA aux instants %v, attendu comme un disque sain : %d X et %d IA aux instants %v",
+			ko.x, ko.ai, ko.at, ok.x, ok.ai, ok.at)
 	}
-	if xCalls == 0 || e.ai.count() == 0 || xCalls > 3*3 || e.ai.count() > 3*3 {
-		t.Fatalf("%d appel(s) X et %d appel(s) IA pour 3 essais", xCalls, e.ai.count())
+	// rien n'est sur le disque tant qu'il refuse l'écriture
+	if d, err := OpenStore(filepath.Dir(ko.e.st.store.path)); err != nil {
+		t.Fatal(err)
+	} else if w := d.Snapshot().Account("main").Watch; len(w) != 1 || w[0].LastPolled.After(ko.start) {
+		t.Fatalf("disque en échec : relevé de veille enregistré %+v", w)
 	}
-	if logs != 3 {
-		t.Fatalf("%d ligne(s) au journal du processus, attendu une par essai (3)", logs)
+	// disque rétabli : la prochaine écriture réussie enregistre ce qui est
+	// gardé en mémoire (relevé de veille, tri)
+	ko.restore()
+	if _, err := ko.e.st.AddDraft("main", "Un brouillon fictif", "", "", ""); err != nil {
+		t.Fatal(err)
 	}
-
-	// disque rétabli : le prochain essai enregistre la veille et la campagne
-	restore()
-	e.now = start.Add(3 * time.Hour)
-	out := e.st.Tick(ctx)
-	if out["watch"] == nil || out["triage"] == nil || out["campaigns"] == nil {
-		t.Fatalf("disque rétabli : sortie %v", out)
+	s2, err := OpenStore(filepath.Dir(ko.e.st.store.path))
+	if err != nil {
+		t.Fatal(err)
 	}
-	d := e.st.store.Snapshot()
-	if w := d.Account("main").Watch; len(w) != 1 || w[0].LastPolled.IsZero() {
+	d := s2.Snapshot()
+	if w := d.Account("main").Watch; len(w) != 1 || !w[0].LastPolled.After(ko.start) {
 		t.Fatalf("disque rétabli : relevé de veille non enregistré %+v", w)
 	}
 	for _, it := range d.Items {
@@ -710,29 +724,72 @@ func TestTickWaitsAfterSaveFailure(t *testing.T) {
 	}
 }
 
-// LOT1-T10 : l'attente après un échec d'écriture cesse dès qu'une écriture
-// réussit (disque réparé, action faite depuis l'interface) : le planificateur
-// n'attend pas la fin de l'heure.
-func TestTickWaitEndsOnSuccessfulWrite(t *testing.T) {
+// breakAfterPostX : X fictif qui fait échouer le disque juste après un envoi
+// (repris du second audit, audit2BreakX).
+type breakAfterPostX struct {
+	*fakeX
+	after func()
+}
+
+func (b breakAfterPostX) Post(ctx context.Context, r PostRequest) (string, error) {
+	id, err := b.fakeX.Post(ctx, r)
+	b.after()
+	return id, err
+}
+
+// LOT1-T12, défaut B2 du second audit
+// (TestAudit2DefautPublicationOublieeApresEchecEcriture) : un post est envoyé
+// sur X, puis l'écriture du résultat échoue. Avec le retour arrière de
+// Store.Update, la mémoire revenait à « publishing » sans TweetID ;
+// publishedToday ne le comptait pas et un second post partait le même jour,
+// au-delà de la limite quotidienne. Attendu (comme sur 7fefcda) : un seul
+// envoi, et le post est « published » avec son TweetID sur le disque dès la
+// prochaine écriture réussie.
+func TestPublishedPostRememberedAfterSaveFailure(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
-	if _, err := e.st.AddWatch("main", "user", "@source", 60); err != nil {
-		t.Fatal(err)
-	}
-	e.x.feed = []Tweet{tw("1", "a", "Les agents IA en production")}
 	e.st.logf = func(string, ...any) {}
-	restore := breakSave(t, e.st.store.path)
-	e.st.Tick(ctx) // relevé fait, écriture en échec : attente d'une heure
-	restore()
-	e.now = e.now.Add(time.Minute)
-	if out := e.st.Tick(ctx); out["watch"] != nil {
-		t.Fatalf("pendant l'attente, sans écriture réussie : sortie %v", out)
+	_ = e.st.store.Update(func(d *Data) error { d.Account("main").DailyLimit = 1; return nil })
+	a := e.draft(t, "Premier post fictif du jour")
+	b := e.draft(t, "Second post fictif du jour")
+	for _, p := range []*Post{a, b} {
+		if _, err := e.st.Validate(p.ID, "Testeur", nil, true); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := e.st.AddDraft("main", "Un brouillon fictif", "", "", ""); err != nil {
+	var restore func()
+	broke := false
+	e.st.backendFor = func(*Account) (XBackend, error) {
+		return breakAfterPostX{e.x, func() {
+			if !broke {
+				broke = true
+				restore = breakSave(t, e.st.store.path)
+			}
+		}}, nil
+	}
+	e.st.Tick(ctx) // A part sur X, l'écriture de son résultat échoue
+	if restore == nil {
+		t.Fatal("prérequis : aucun envoi sur X au premier passage")
+	}
+	restore()
+	for i := 1; i <= 5; i++ {
+		e.now = e.now.Add(time.Minute)
+		e.st.Tick(ctx)
+	}
+	if _, err := e.st.AddDraft("main", "Écriture réussie fictive", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	e.now = e.now.Add(time.Minute)
-	if out := e.st.Tick(ctx); out["watch"] == nil {
-		t.Fatalf("après une écriture réussie, la veille doit reprendre : sortie %v", out)
+	// redémarrage : nouveau Store sur le même fichier
+	s2, err := OpenStore(filepath.Dir(e.st.store.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pa := s2.Snapshot().Post(a.ID)
+	t.Logf("envois sur X : %d ; post A sur disque : statut %q, TweetID %q", len(e.x.posted), pa.Status, pa.TweetID)
+	if pa.Status != StatusPublished || pa.TweetID == "" {
+		t.Errorf("post A envoyé sur X : statut %q, TweetID %q après rétablissement du disque, attendu published avec son TweetID", pa.Status, pa.TweetID)
+	}
+	if len(e.x.posted) > 1 {
+		t.Errorf("limite d'un post par jour : %d posts envoyés sur X le même jour", len(e.x.posted))
 	}
 }

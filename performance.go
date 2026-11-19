@@ -657,8 +657,8 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		return nil
 	})
 	if err != nil {
-		// rien n'est enregistré, ni en mémoire (Store.Update) : l'analyse
-		// automatique reste due ; Tick attend saveRetry avant un nouvel essai
+		// l'analyse est gardée en mémoire (Store.Update) : elle n'est plus due
+		// et la prochaine écriture réussie l'enregistre
 		return nil, fmt.Errorf("%w : %w", errPerfSave, err)
 	}
 	if allFailed {
@@ -668,8 +668,9 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 }
 
 // errPerfSave signale que l'écriture unique de l'analyse dans data.json a
-// échoué : ni la date, ni les propositions, ni le journal n'y sont enregistrés.
-var errPerfSave = errors.New("analyse des performances : enregistrement impossible")
+// échoué. L'analyse (date, état du compte, propositions, journal) est gardée
+// en mémoire et sera enregistrée à la prochaine écriture réussie.
+var errPerfSave = errors.New("analyse des performances : enregistrement différé (l'analyse est gardée et sera enregistrée à la prochaine écriture réussie)")
 
 // errPerfBusy : une analyse des performances tourne déjà dans ce processus.
 var errPerfBusy = errors.New("analyse des performances déjà en cours : réessayez quand elle sera terminée")

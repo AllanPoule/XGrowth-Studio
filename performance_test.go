@@ -2121,44 +2121,52 @@ func TestAPISettingsKeepPerfState(t *testing.T) {
 
 // ---------------------------------------------------------------- LOT1-T10
 
-// Audit A5, repris (TestAuditA5SaveFailureLeavesUnsavedStateInMemory) : quand
-// l'écriture unique de l'analyse échoue (errPerfSave, « rien n'est
-// enregistré »), la mémoire reste celle du disque : ni propositions, ni date
-// d'analyse, et une écriture suivante sans rapport ne les enregistre pas.
-func TestPerfSaveFailureLeavesMemoryAsOnDisk(t *testing.T) {
+// LOT1-T12 (inverse le test LOT1-T10 qui figeait le retour arrière de
+// Store.Update) : quand l'écriture unique de l'analyse échoue (errPerfSave,
+// « enregistrement différé »), l'analyse reste en mémoire (propositions, état
+// du compte, date) sans être sur le disque ; une fois le disque rétabli, une
+// écriture sans rapport l'enregistre, et un nouveau Store la relit.
+func TestPerfSaveFailureKeptInMemoryAndSavedLater(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	perfFixture(t, e, "main")
-	tmp := e.st.store.path + ".tmp"
-	if err := os.Mkdir(tmp, 0o700); err != nil {
-		t.Fatal(err)
+	restore := breakSave(t, e.st.store.path)
+	_, err := e.st.AnalyzePerformance(ctx, "main")
+	if !errors.Is(err, errPerfSave) || !strings.Contains(err.Error(), "enregistrement différé") {
+		t.Fatalf("prérequis : errPerfSave (enregistrement différé) attendu, reçu %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "x"), nil, 0o600); err != nil {
-		t.Fatal(err)
+	mem := e.st.store.Snapshot()
+	n := len(perfRules(mem))
+	st, ok := mem.Settings.PerfState["main"]
+	if n == 0 || !ok || !st.LastAt.Equal(e.now) || mem.Settings.LastPerfAnalysisAt == nil {
+		t.Fatalf("après errPerfSave, mémoire : %d règle(s), PerfState %+v, LastPerfAnalysisAt %v ; attendu l'analyse gardée",
+			n, mem.Settings.PerfState, mem.Settings.LastPerfAnalysisAt)
 	}
-	if _, err := e.st.AnalyzePerformance(ctx, "main"); !errors.Is(err, errPerfSave) {
-		t.Fatalf("prérequis : errPerfSave attendu, reçu %v", err)
+	disk := func() *Data {
+		b, err := os.ReadFile(e.st.store.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d Data
+		if err := json.Unmarshal(b, &d); err != nil {
+			t.Fatal(err)
+		}
+		return &d
 	}
-	d := e.st.store.Snapshot()
-	if n := len(perfRules(d)); n != 0 || d.Settings.LastPerfAnalysisAt != nil {
-		t.Errorf("après errPerfSave, la mémoire contient %d règle(s) et LastPerfAnalysisAt=%v (le disque : aucune)", n, d.Settings.LastPerfAnalysisAt)
+	if d := disk(); len(perfRules(d)) != 0 || len(d.Settings.PerfState) != 0 {
+		t.Fatalf("disque en échec : %d règle(s) et PerfState %+v sur le disque", len(perfRules(d)), d.Settings.PerfState)
 	}
-	// le disque se rétablit ; une écriture sans rapport ne doit pas
-	// enregistrer l'analyse annoncée comme non enregistrée
-	if err := os.RemoveAll(tmp); err != nil {
-		t.Fatal(err)
-	}
+	// le disque se rétablit : la prochaine écriture réussie, sans rapport,
+	// enregistre l'analyse gardée en mémoire
+	restore()
 	e.tune(t, nil, func(s *Settings) { s.AutoSynthesis = !s.AutoSynthesis })
-	b, err := os.ReadFile(e.st.store.path)
+	s2, err := OpenStore(filepath.Dir(e.st.store.path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var disk Data
-	if err := json.Unmarshal(b, &disk); err != nil {
-		t.Fatal(err)
-	}
-	if n := len(perfRules(&disk)); n != 0 {
-		t.Errorf("une écriture sans rapport a enregistré %d règle(s) d'une analyse signalée en échec d'enregistrement", n)
+	d := s2.Snapshot()
+	if got := len(perfRules(d)); got != n || !reflect.DeepEqual(d.Settings.PerfState, mem.Settings.PerfState) {
+		t.Fatalf("disque rétabli : %d règle(s) (attendu %d), PerfState %+v (attendu %+v)", got, n, d.Settings.PerfState, mem.Settings.PerfState)
 	}
 }
 
@@ -2245,10 +2253,11 @@ func breakSave(t *testing.T, path string) func() {
 	}
 }
 
-// LOT1-T10, Store.Update (valable pour tout le studio) : si l'écriture
-// échoue, la mémoire revient à l'état d'avant l'appel ; une fois le disque
-// rétabli, l'écriture suivante n'enregistre que son propre changement.
-func TestStoreUpdateRestoresMemoryWhenSaveFails(t *testing.T) {
+// LOT1-T12 (inverse le test LOT1-T10 qui figeait le retour arrière) : si fn
+// réussit et que l'écriture échoue, Store.Update garde le changement en
+// mémoire et renvoie l'erreur ; le disque reste inchangé ; la prochaine
+// écriture réussie enregistre tout. Si fn échoue, rien ne change.
+func TestStoreUpdateKeepsMemoryWhenSaveFails(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenStore(dir)
 	if err != nil {
@@ -2267,12 +2276,25 @@ func TestStoreUpdateRestoresMemoryWhenSaveFails(t *testing.T) {
 	if err := add("avant"); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	restore := breakSave(t, s.path)
-	if err := add("non enregistrée"); err == nil {
+	if err := add("en attente"); err == nil {
 		t.Fatal("Update : écriture impossible, aucune erreur")
 	}
-	if got := texts(s.Snapshot()); !reflect.DeepEqual(got, []string{"avant"}) {
-		t.Fatalf("mémoire après l'échec d'écriture : %q, attendu [avant]", got)
+	if err := s.Update(func(d *Data) error {
+		d.Learnings = append(d.Learnings, Learning{Text: "refusée"})
+		return errors.New("fn en échec")
+	}); err == nil {
+		t.Fatal("Update : fn en échec, aucune erreur")
+	}
+	if got := texts(s.Snapshot()); !reflect.DeepEqual(got, []string{"avant", "en attente"}) {
+		t.Fatalf("mémoire après l'échec d'écriture : %q, attendu [avant en attente]", got)
+	}
+	if after, err := os.ReadFile(s.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("data.json modifié malgré l'échec d'écriture (err %v)", err)
 	}
 	restore()
 	if err := add("après"); err != nil {
@@ -2282,54 +2304,97 @@ func TestStoreUpdateRestoresMemoryWhenSaveFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := texts(s2.Snapshot()); !reflect.DeepEqual(got, []string{"avant", "après"}) {
-		t.Fatalf("disque : %q, attendu [avant après]", got)
+	if got := texts(s2.Snapshot()); !reflect.DeepEqual(got, []string{"avant", "en attente", "après"}) {
+		t.Fatalf("disque : %q, attendu [avant en attente après]", got)
 	}
 }
 
-// LOT1-T10, critère 2 : le disque refuse toute écriture pendant 2 h et le
-// planificateur passe toutes les 60 s (121 passages, de 0 à 120 min). Sans
-// attente, l'analyse, jamais enregistrée, resterait due et appellerait l'IA à
-// chaque passage (121 appels) ; avec saveRetry (Tick), 3 appels seulement, à 0,
-// 60 et 120 min. Le disque rétabli, le passage suivant l'attente enregistre.
-func TestPerfAutoAnalysisWaitsAfterSaveFailure(t *testing.T) {
-	ctx := context.Background()
+// perfTestAccounts : comptes fictifs de perfThreeAccounts.
+var perfTestAccounts = []string{"main", "deux", "trois"}
+
+// perfThreeAccounts (repris du second audit, audit2Env) : 3 comptes fictifs
+// avec la fixture de perfFixture, analyse automatique activée, jamais faite. X
+// est injoignable : RefreshMetrics ne remplace pas les mesures de la fixture
+// et aucune autre étape de Tick n'appelle l'IA.
+func perfThreeAccounts(t *testing.T) *env {
+	t.Helper()
 	e := newEnv(t)
-	perfFixture(t, e, "main")
-	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	addPerfAccount(t, e, "deux")
+	addPerfAccount(t, e, "trois")
+	for _, a := range perfTestAccounts {
+		perfFixture(t, e, a)
+	}
 	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	e.st.backendFor = func(*Account) (XBackend, error) { return nil, errors.New("X fictif injoignable") }
 	e.st.logf = func(string, ...any) {}
-	perfCalls := 0
+	return e
+}
+
+// perfCallsByAccount compte les appels IA d'analyse des performances par
+// compte (repéré par l'identifiant de ses posts dans la demande) ; si fail
+// n'est pas nil, chaque appel d'analyse échoue avec cette erreur.
+func perfCallsByAccount(e *env, fail error) func(account string) int {
+	var mu sync.Mutex
+	by := map[string]int{}
 	e.ai.fail = func(user string) error {
-		if strings.Contains(user, "<signaux>") {
-			perfCalls++
+		if !strings.Contains(user, "<signaux>") {
+			return nil
 		}
-		return nil
+		mu.Lock()
+		for _, a := range perfTestAccounts {
+			if strings.Contains(user, "- "+a+"_") {
+				by[a]++
+			}
+		}
+		mu.Unlock()
+		return fail
 	}
-	restore := breakSave(t, e.st.store.path)
+	return func(a string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return by[a]
+	}
+}
+
+// tickEveryMinute : un passage du planificateur par minute simulée pendant d.
+func tickEveryMinute(e *env, d time.Duration) {
 	start := e.now
-	var at []time.Duration
-	for m := 0; m <= 120; m++ {
-		e.now = start.Add(time.Duration(m) * time.Minute)
-		n := perfCalls
-		e.st.Tick(ctx)
-		if perfCalls > n {
-			at = append(at, e.now.Sub(start))
-		}
+	for m := time.Duration(0); m < d; m += time.Minute {
+		e.now = start.Add(m)
+		e.st.Tick(context.Background())
 	}
-	if want := []time.Duration{0, time.Hour, 2 * time.Hour}; !reflect.DeepEqual(at, want) {
-		t.Fatalf("disque en échec pendant 2 h, un passage par minute : %d appel(s) IA aux instants %v, attendu %v", perfCalls, at, want)
-	}
-	if n := len(perfRules(e.st.store.Snapshot())); n != 0 {
-		t.Fatalf("%d proposition(s) en mémoire alors que rien n'est enregistré", n)
-	}
-	restore()
-	e.now = start.Add(3 * time.Hour) // fin de l'attente du dernier essai
-	if out := e.st.Tick(ctx); out["perf"] == nil || perfCalls != 4 {
-		t.Fatalf("disque rétabli : %d appel(s) IA, sortie %v", perfCalls, out)
-	}
-	if n := len(perfRules(e.st.store.Snapshot())); n == 0 {
-		t.Fatal("disque rétabli : aucune proposition enregistrée")
+}
+
+// LOT1-T12, défaut B1 du second audit
+// (TestAudit2DefautDisqueEnEchecRappelleIAChaqueHeure) : disque en échec
+// pendant 24 h, 3 comptes dus, un passage du planificateur par minute. Avec le
+// retour arrière de Store.Update, l'état d'analyse n'était jamais retenu : 24
+// appels IA par compte, résultats jetés. L'état gardé en mémoire suffit :
+//   - IA disponible : un seul appel par compte (critère 1) ;
+//   - IA en panne : l'attente croissante (perfRetryDelay) tient, au plus 5
+//     appels par compte en 24 h (critère 3).
+func TestPerfDiskFailureDoesNotRecallAIEveryHour(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		fail error
+		max  int
+	}{
+		{"IA disponible", nil, 1},
+		{"IA en panne (429)", errors.New("HTTP 429 (fictif)"), 5},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := perfThreeAccounts(t)
+			calls := perfCallsByAccount(e, c.fail)
+			restore := breakSave(t, e.st.store.path)
+			tickEveryMinute(e, 24*time.Hour)
+			restore()
+			for _, a := range perfTestAccounts {
+				t.Logf("disque en échec 24 h, %s : %s=%d appel(s) IA", c.name, a, calls(a))
+				if n := calls(a); n == 0 || n > c.max {
+					t.Errorf("disque en échec 24 h, %s : %d appel(s) IA d'analyse pour %s, attendu entre 1 et %d", c.name, n, a, c.max)
+				}
+			}
+		})
 	}
 }
 
