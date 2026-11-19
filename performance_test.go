@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -947,10 +948,19 @@ func TestAnalyzeCallsAIAtMostOncePerAccount(t *testing.T) {
 }
 
 // Une analyse lancée plus tôt qui finit après une autre ne fait pas reculer
-// LastPerfAnalysisAt (qui sert au déclenchement hebdomadaire).
+// LastPerfAnalysisAt (qui sert au déclenchement hebdomadaire). Depuis
+// LOT1-T10, un processus ne fait qu'une analyse à la fois : la seconde vient
+// d'un autre processus (la CLI pendant `serve`), simulé par un second Studio
+// sur le même dossier.
 func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
 	e := newEnv(t)
 	perfFixture(t, e, "main")
+	other, err := OpenStore(filepath.Dir(e.st.store.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := NewStudio(other)
+	cli.ai, cli.now = e.st.ai, e.st.now
 	early := e.now
 	late := early.Add(time.Minute)
 	nested := false
@@ -960,7 +970,7 @@ func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
 			// analyse démarre plus tard et se termine avant elle
 			nested = true
 			e.now = late
-			if _, err := e.st.AnalyzePerformance(context.Background(), "main"); err != nil {
+			if _, err := cli.AnalyzePerformance(context.Background(), "main"); err != nil {
 				t.Error(err)
 			}
 		}
@@ -2106,5 +2116,335 @@ func TestAPISettingsKeepPerfState(t *testing.T) {
 	want := map[string]PerfAccountState{"main": {LastAt: last, Failures: 1, NextAt: next}}
 	if got := e.st.store.Snapshot().Settings.PerfState; !reflect.DeepEqual(got, want) {
 		t.Fatalf("PerfState = %+v, attendu %+v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------- LOT1-T10
+
+// Audit A5, repris (TestAuditA5SaveFailureLeavesUnsavedStateInMemory) : quand
+// l'écriture unique de l'analyse échoue (errPerfSave, « rien n'est
+// enregistré »), la mémoire reste celle du disque : ni propositions, ni date
+// d'analyse, et une écriture suivante sans rapport ne les enregistre pas.
+func TestPerfSaveFailureLeavesMemoryAsOnDisk(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	tmp := e.st.store.path + ".tmp"
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AnalyzePerformance(ctx, "main"); !errors.Is(err, errPerfSave) {
+		t.Fatalf("prérequis : errPerfSave attendu, reçu %v", err)
+	}
+	d := e.st.store.Snapshot()
+	if n := len(perfRules(d)); n != 0 || d.Settings.LastPerfAnalysisAt != nil {
+		t.Errorf("après errPerfSave, la mémoire contient %d règle(s) et LastPerfAnalysisAt=%v (le disque : aucune)", n, d.Settings.LastPerfAnalysisAt)
+	}
+	// le disque se rétablit ; une écriture sans rapport ne doit pas
+	// enregistrer l'analyse annoncée comme non enregistrée
+	if err := os.RemoveAll(tmp); err != nil {
+		t.Fatal(err)
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoSynthesis = !s.AutoSynthesis })
+	b, err := os.ReadFile(e.st.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk Data
+	if err := json.Unmarshal(b, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(perfRules(&disk)); n != 0 {
+		t.Errorf("une écriture sans rapport a enregistré %d règle(s) d'une analyse signalée en échec d'enregistrement", n)
+	}
+}
+
+// perfBlockingAI (audit A6) : IA sûre pour la concurrence ; chaque appel
+// attend qu'un second appel arrive (ou 2 s), puis propose une règle par
+// signal, avec un texte propre à l'appel (une IA réelle reformule d'un appel
+// à l'autre, la déduplication par texte ne suffit donc pas).
+type perfBlockingAI struct {
+	mu    sync.Mutex
+	calls int
+	both  chan struct{}
+	once  sync.Once
+}
+
+func (b *perfBlockingAI) JSON(_ context.Context, _, user string, _ map[string]any, out any) error {
+	b.mu.Lock()
+	b.calls++
+	n := b.calls
+	b.mu.Unlock()
+	if n >= 2 {
+		b.once.Do(func() { close(b.both) })
+	}
+	select {
+	case <-b.both:
+	case <-time.After(2 * time.Second):
+	}
+	block := user
+	if i, j := strings.Index(user, "<signaux>"), strings.Index(user, "</signaux>"); i >= 0 && j > i {
+		block = user[i:j]
+	}
+	var list []map[string]any
+	for _, part := range strings.Split(block, "- [")[1:] {
+		key := part[:strings.Index(part, "]")]
+		list = append(list, map[string]any{"text": fmt.Sprintf("Privilégie la variante %c pour %s", 'A'+rune(n-1), key),
+			"rationale": "test", "signals": []string{key}})
+	}
+	raw, _ := json.Marshal(map[string]any{"proposals": list})
+	return json.Unmarshal(raw, out)
+}
+
+// Audit A6, repris (TestAuditA6ConcurrentAnalysesDoubleAICallsAndProposals) :
+// deux analyses du même compte lancées presque en même temps (clic pendant le
+// passage du planificateur, deux onglets) ne font qu'un appel IA et pas plus
+// de perfMaxProposals propositions pour le compte.
+func TestPerfConcurrentAnalysesMakeOneAICall(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	ai := &perfBlockingAI{both: make(chan struct{})}
+	e.st.ai = func(Settings) AI { return ai }
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = e.st.AnalyzePerformance(ctx, "main")
+		}(i)
+	}
+	wg.Wait()
+	n := len(perfRules(e.st.store.Snapshot()))
+	if ai.calls > 1 || n > perfMaxProposals {
+		t.Fatalf("deux analyses simultanées de main : %d appel(s) IA, %d proposition(s) enregistrée(s) (plafond par analyse %d) ; erreurs %v",
+			ai.calls, n, perfMaxProposals, errs)
+	}
+}
+
+// breakSave fait échouer toute écriture de data.json (un dossier non vide à
+// la place du fichier temporaire, ce qui vaut aussi pour root) ; la fonction
+// rendue rétablit le disque.
+func breakSave(t *testing.T, path string) func() {
+	t.Helper()
+	tmp := path + ".tmp"
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.RemoveAll(tmp); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// LOT1-T10, Store.Update (valable pour tout le studio) : si l'écriture
+// échoue, la mémoire revient à l'état d'avant l'appel ; une fois le disque
+// rétabli, l'écriture suivante n'enregistre que son propre changement.
+func TestStoreUpdateRestoresMemoryWhenSaveFails(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := func(text string) error {
+		return s.Update(func(d *Data) error { d.Learnings = append(d.Learnings, Learning{Text: text}); return nil })
+	}
+	texts := func(d *Data) []string {
+		var out []string
+		for _, l := range d.Learnings {
+			out = append(out, l.Text)
+		}
+		return out
+	}
+	if err := add("avant"); err != nil {
+		t.Fatal(err)
+	}
+	restore := breakSave(t, s.path)
+	if err := add("non enregistrée"); err == nil {
+		t.Fatal("Update : écriture impossible, aucune erreur")
+	}
+	if got := texts(s.Snapshot()); !reflect.DeepEqual(got, []string{"avant"}) {
+		t.Fatalf("mémoire après l'échec d'écriture : %q, attendu [avant]", got)
+	}
+	restore()
+	if err := add("après"); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(s2.Snapshot()); !reflect.DeepEqual(got, []string{"avant", "après"}) {
+		t.Fatalf("disque : %q, attendu [avant après]", got)
+	}
+}
+
+// LOT1-T10, critère 2 : le disque refuse toute écriture pendant 2 h et le
+// planificateur passe toutes les 60 s (121 passages, de 0 à 120 min). Sans
+// attente, l'analyse, jamais enregistrée, resterait due et appellerait l'IA à
+// chaque passage (121 appels) ; avec saveRetry (Tick), 3 appels seulement, à 0,
+// 60 et 120 min. Le disque rétabli, le passage suivant l'attente enregistre.
+func TestPerfAutoAnalysisWaitsAfterSaveFailure(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	e.st.logf = func(string, ...any) {}
+	perfCalls := 0
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "<signaux>") {
+			perfCalls++
+		}
+		return nil
+	}
+	restore := breakSave(t, e.st.store.path)
+	start := e.now
+	var at []time.Duration
+	for m := 0; m <= 120; m++ {
+		e.now = start.Add(time.Duration(m) * time.Minute)
+		n := perfCalls
+		e.st.Tick(ctx)
+		if perfCalls > n {
+			at = append(at, e.now.Sub(start))
+		}
+	}
+	if want := []time.Duration{0, time.Hour, 2 * time.Hour}; !reflect.DeepEqual(at, want) {
+		t.Fatalf("disque en échec pendant 2 h, un passage par minute : %d appel(s) IA aux instants %v, attendu %v", perfCalls, at, want)
+	}
+	if n := len(perfRules(e.st.store.Snapshot())); n != 0 {
+		t.Fatalf("%d proposition(s) en mémoire alors que rien n'est enregistré", n)
+	}
+	restore()
+	e.now = start.Add(3 * time.Hour) // fin de l'attente du dernier essai
+	if out := e.st.Tick(ctx); out["perf"] == nil || perfCalls != 4 {
+		t.Fatalf("disque rétabli : %d appel(s) IA, sortie %v", perfCalls, out)
+	}
+	if n := len(perfRules(e.st.store.Snapshot())); n == 0 {
+		t.Fatal("disque rétabli : aucune proposition enregistrée")
+	}
+}
+
+// LOT1-T10 : pendant qu'une analyse tourne, une seconde analyse manuelle est
+// refusée tout de suite (errPerfBusy) sans appel IA, et Tick saute l'analyse
+// sans rien écrire. Le verrou est rendu à la fin de la première.
+func TestPerfSecondAnalysisRefusedWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	started, release := make(chan struct{}, 2), make(chan struct{})
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "<signaux>") {
+			started <- struct{}{}
+			<-release
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.st.AnalyzePerformance(ctx, "main")
+		done <- err
+	}()
+	<-started // la première analyse attend la réponse de l'IA
+	before, err := os.ReadFile(e.st.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AnalyzePerformance(ctx, "main"); !errors.Is(err, errPerfBusy) {
+		t.Fatalf("seconde analyse manuelle : erreur %v, attendu errPerfBusy", err)
+	}
+	if !perfAnalysisDue(e.st.store.Snapshot(), e.now) {
+		t.Fatal("prérequis : l'analyse automatique doit être due")
+	}
+	if out := e.st.Tick(ctx); out["perf"] != nil {
+		t.Fatalf("Tick pendant une analyse : sortie %v", out)
+	}
+	if n := e.ai.count(); n != 1 {
+		t.Fatalf("%d appel(s) IA pendant l'analyse en cours, attendu 1", n)
+	}
+	if after, err := os.ReadFile(e.st.store.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("data.json modifié par la seconde analyse ou par Tick (err %v)", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := len(perfRules(e.st.store.Snapshot())); n == 0 || n > perfMaxProposals {
+		t.Fatalf("%d proposition(s) enregistrée(s), attendu de 1 à %d", n, perfMaxProposals)
+	}
+	e.ai.fail = nil
+	if _, err := e.st.AnalyzePerformance(ctx, "main"); err != nil || e.ai.count() != 2 {
+		t.Fatalf("analyse suivante : erreur %v, %d appel(s) IA au total", err, e.ai.count())
+	}
+}
+
+// LOT1-T10, critère 3 : 19 règles de performance en place ; pendant l'appel
+// IA de l'analyse, le propriétaire accepte une 20e règle. L'analyse garde la
+// décision, enregistre ses propositions, et le plafond de 20 tient : accepter
+// une des nouvelles propositions est refusé.
+func TestPerfAcceptDuringAnalysisKeepsCapAndProposals(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	if err := e.st.store.Update(func(d *Data) error {
+		for i := 0; i < perfMaxAccepted-1; i++ {
+			d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: fmt.Sprintf("r_place%d", i), Account: "main",
+				Text: fmt.Sprintf("Règle fictive en place %c", 'A'+rune(i)), Source: RuleSourcePerformance, Status: RuleAccepted, CreatedAt: e.now})
+		}
+		d.RuleProposals = append(d.RuleProposals, &RuleProposal{ID: "r_attente", Account: "main",
+			Text: "Règle fictive en attente de décision", Source: RuleSourcePerformance, Status: RuleProposed, CreatedAt: e.now})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var decideErr error
+	decided := false
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "<signaux>") {
+			_, decideErr = e.st.DecideRule("r_attente", "accept", "")
+			decided = true
+		}
+		return nil
+	}
+	res, err := e.st.AnalyzePerformance(ctx, "main")
+	if err != nil || !decided || decideErr != nil {
+		t.Fatalf("analyse : %v ; décision prise pendant l'appel : %v (%v)", err, decided, decideErr)
+	}
+	proposed := res.Accounts[0].Proposed
+	if len(proposed) == 0 {
+		t.Fatalf("aucune proposition : %+v", res.Accounts[0])
+	}
+	// sur le disque, relu par un autre Store
+	s2, err := OpenStore(filepath.Dir(e.st.store.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := s2.Snapshot()
+	if n := perfAcceptedCount(d, "main"); n != perfMaxAccepted {
+		t.Fatalf("%d règles de performance en place, attendu %d", n, perfMaxAccepted)
+	}
+	if r := d.RuleProposal("r_attente"); r == nil || r.Status != RuleAccepted || r.DecidedAt == nil {
+		t.Fatalf("décision prise pendant l'analyse perdue : %+v", r)
+	}
+	for _, p := range proposed {
+		if r := d.RuleProposal(p.ID); r == nil || r.Status != RuleProposed {
+			t.Fatalf("proposition %s perdue ou modifiée : %+v", p.ID, r)
+		}
+	}
+	if _, err := e.st.DecideRule(proposed[0].ID, "accept", ""); err == nil {
+		t.Fatal("plafond atteint : l'acceptation d'une nouvelle proposition doit être refusée")
+	}
+	if n := perfAcceptedCount(e.st.store.Snapshot(), "main"); n != perfMaxAccepted {
+		t.Fatalf("%d règles de performance en place après le refus, attendu %d", n, perfMaxAccepted)
 	}
 }

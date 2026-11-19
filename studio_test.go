@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +15,11 @@ import (
 // ---------------------------------------------------------------- doublures
 
 type fakeAI struct {
+	// mu protège le compteur et le dernier message : des tests lancent des
+	// analyses en parallèle (LOT1-T10) et lisent count() pendant qu'elles
+	// tournent. Les lectures directes de calls restent sûres une fois les
+	// appels terminés.
+	mu         sync.Mutex
 	calls      int
 	lastSys    string
 	lastMsg    string
@@ -26,8 +33,12 @@ type fakeAI struct {
 }
 
 func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]any, out any) error {
+	f.mu.Lock()
 	f.calls++
 	f.lastSys, f.lastMsg, f.lastSchema = system, user, schema
+	f.mu.Unlock()
+	// fail est appelé hors du verrou : il peut bloquer (analyse en cours) ou
+	// agir sur le studio (décision pendant l'analyse) sans gêner d'autres appels
 	if f.fail != nil {
 		if err := f.fail(user); err != nil {
 			return err
@@ -120,6 +131,13 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 	}
 	b, _ := json.Marshal(resp)
 	return json.Unmarshal(b, out)
+}
+
+// count : nombre d'appels, lu sous verrou pendant que d'autres appels tournent.
+func (f *fakeAI) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 type fakeX struct {
@@ -585,5 +603,136 @@ func TestParseArgs(t *testing.T) {
 	}
 	if parseTweetID("https://twitter.com/u/status/99/photo/1") != "99" {
 		t.Fatal("parseTweetID")
+	}
+}
+
+// countX compte les appels faits à X par le studio (lectures et envois).
+type countX struct {
+	*fakeX
+	calls *int
+}
+
+func (c countX) Me(ctx context.Context) (*Profile, error) { *c.calls++; return c.fakeX.Me(ctx) }
+func (c countX) Post(ctx context.Context, r PostRequest) (string, error) {
+	*c.calls++
+	return c.fakeX.Post(ctx, r)
+}
+func (c countX) Search(ctx context.Context, q string, n int) ([]Tweet, error) {
+	*c.calls++
+	return c.fakeX.Search(ctx, q, n)
+}
+func (c countX) UserPosts(ctx context.Context, h string, n int) ([]Tweet, error) {
+	*c.calls++
+	return c.fakeX.UserPosts(ctx, h, n)
+}
+func (c countX) Bookmarks(ctx context.Context, n int) ([]Tweet, error) {
+	*c.calls++
+	return c.fakeX.Bookmarks(ctx, n)
+}
+func (c countX) Tweet(ctx context.Context, id string) (*Tweet, error) {
+	*c.calls++
+	return c.fakeX.Tweet(ctx, id)
+}
+
+// LOT1-T10 : Store.Update ne garde plus en mémoire ce qui n'est pas
+// enregistré ; la veille (LastPolled), le tri (TriagedAt), les statistiques et
+// les campagnes (SearchesDone, dernier passage) ne retiennent donc plus, disque
+// en échec, qu'ils viennent d'appeler X ou l'IA. Sans attente, chaque passage
+// du planificateur refaisait ces appels (10 recherches X en 10 min mesurées en
+// relecture). Avec saveRetry, Tick saute ces étapes pendant une heure après un
+// échec d'écriture : disque en panne 2 h, un passage par minute, les appels X
+// et IA n'ont lieu qu'à 0, 60 et 120 min.
+func TestTickWaitsAfterSaveFailure(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	xCalls := 0
+	e.st.backendFor = func(*Account) (XBackend, error) { return countX{e.x, &xCalls}, nil }
+	if _, err := e.st.AddWatch("main", "user", "@source", 60); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SaveCampaign(testCampaign()); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.store.Update(func(d *Data) error {
+		a := d.Account("main")
+		a.AutoTriage, a.AutoDraft = true, true
+		return nil
+	})
+	e.x.feed = []Tweet{
+		feedTweet("1", "alice", "Je galère : mon agent a modifié des fichiers et je ne sais pas lesquels", 120),
+		feedTweet("2", "bob", "Les agents IA en production", 300),
+	}
+	// des contenus de veille enregistrés, à trier par l'IA
+	if r := e.st.PollWatch(ctx, "", true); len(r) != 1 || r[0].Added != 2 {
+		t.Fatalf("prérequis, veille : %+v", r)
+	}
+	xCalls, e.ai.calls = 0, 0
+	var logs int
+	e.st.logf = func(string, ...any) { logs++ }
+	restore := breakSave(t, e.st.store.path)
+	start := e.now
+	var at []time.Duration
+	for m := 0; m <= 120; m++ {
+		e.now = start.Add(time.Duration(m) * time.Minute)
+		nx, nai := xCalls, e.ai.count()
+		e.st.Tick(ctx)
+		if xCalls > nx || e.ai.count() > nai {
+			at = append(at, e.now.Sub(start))
+		}
+	}
+	t.Logf("disque en échec 2 h, 121 passages : %d appel(s) X, %d appel(s) IA, aux instants %v", xCalls, e.ai.count(), at)
+	if want := []time.Duration{0, time.Hour, 2 * time.Hour}; !reflect.DeepEqual(at, want) {
+		t.Fatalf("disque en échec pendant 2 h, un passage par minute : appels X ou IA aux instants %v, attendu %v (%d X, %d IA)",
+			at, want, xCalls, e.ai.count())
+	}
+	if xCalls == 0 || e.ai.count() == 0 || xCalls > 3*3 || e.ai.count() > 3*3 {
+		t.Fatalf("%d appel(s) X et %d appel(s) IA pour 3 essais", xCalls, e.ai.count())
+	}
+	if logs != 3 {
+		t.Fatalf("%d ligne(s) au journal du processus, attendu une par essai (3)", logs)
+	}
+
+	// disque rétabli : le prochain essai enregistre la veille et la campagne
+	restore()
+	e.now = start.Add(3 * time.Hour)
+	out := e.st.Tick(ctx)
+	if out["watch"] == nil || out["triage"] == nil || out["campaigns"] == nil {
+		t.Fatalf("disque rétabli : sortie %v", out)
+	}
+	d := e.st.store.Snapshot()
+	if w := d.Account("main").Watch; len(w) != 1 || w[0].LastPolled.IsZero() {
+		t.Fatalf("disque rétabli : relevé de veille non enregistré %+v", w)
+	}
+	for _, it := range d.Items {
+		if it.TriagedAt == nil {
+			t.Fatalf("disque rétabli : contenu non trié %+v", it)
+		}
+	}
+}
+
+// LOT1-T10 : l'attente après un échec d'écriture cesse dès qu'une écriture
+// réussit (disque réparé, action faite depuis l'interface) : le planificateur
+// n'attend pas la fin de l'heure.
+func TestTickWaitEndsOnSuccessfulWrite(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	if _, err := e.st.AddWatch("main", "user", "@source", 60); err != nil {
+		t.Fatal(err)
+	}
+	e.x.feed = []Tweet{tw("1", "a", "Les agents IA en production")}
+	e.st.logf = func(string, ...any) {}
+	restore := breakSave(t, e.st.store.path)
+	e.st.Tick(ctx) // relevé fait, écriture en échec : attente d'une heure
+	restore()
+	e.now = e.now.Add(time.Minute)
+	if out := e.st.Tick(ctx); out["watch"] != nil {
+		t.Fatalf("pendant l'attente, sans écriture réussie : sortie %v", out)
+	}
+	if _, err := e.st.AddDraft("main", "Un brouillon fictif", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Minute)
+	if out := e.st.Tick(ctx); out["watch"] == nil {
+		t.Fatalf("après une écriture réussie, la veille doit reprendre : sortie %v", out)
 	}
 }

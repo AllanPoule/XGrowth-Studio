@@ -287,6 +287,11 @@ type Store struct {
 	mu      sync.Mutex
 	data    *Data
 	modTime time.Time
+	// saveFailures : nombre d'écritures de Update en échec depuis
+	// l'ouverture ; saveFailing : la dernière a échoué (remis à faux dès
+	// qu'une écriture réussit). En mémoire seulement : voir Studio.saveWait.
+	saveFailures uint64
+	saveFailing  bool
 }
 
 func homeDir() string {
@@ -425,7 +430,10 @@ func (s *Store) View(fn func(d *Data)) {
 	fn(s.data)
 }
 
-// Update applique fn et sauvegarde si fn ne renvoie pas d'erreur.
+// Update applique fn et sauvegarde si fn ne renvoie pas d'erreur. Si fn ou
+// l'écriture échoue, l'état en mémoire reste celui d'avant l'appel, donc celui
+// du disque : rien de ce qui n'est pas enregistré ne s'affiche, et une écriture
+// suivante ne l'enregistre pas en passant.
 func (s *Store) Update(fn func(d *Data) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -443,8 +451,24 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if err := fn(work); err != nil {
 		return err
 	}
+	old := s.data
 	s.data = work
-	return s.save()
+	if err := s.save(); err != nil {
+		s.data = old
+		s.saveFailures++
+		s.saveFailing = true
+		return err
+	}
+	s.saveFailing = false
+	return nil
+}
+
+// SaveFailures renvoie le nombre d'écritures en échec depuis l'ouverture et si
+// la dernière écriture a échoué.
+func (s *Store) SaveFailures() (n uint64, failing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveFailures, s.saveFailing
 }
 
 // Snapshot renvoie une copie profonde (via JSON) pour la lire sans verrou.
