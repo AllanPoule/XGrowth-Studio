@@ -67,3 +67,43 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## Hermes Agent
+
+- Source: https://github.com/NousResearch/hermes-agent (commit `05348a3`)
+- License: MIT
+- Elements adapted (each marked `adapté de hermes-agent : <path>@05348a3` in the code):
+  - `tools/threat_patterns.py` (`INVISIBLE_CHARS`): set of invisible characters refused in learned rules, used in `performance.go` (`invisibleRune`, called by `ruleTextOK`).
+  - `agent/background_review.py` (`_DO_NOT_CAPTURE_BLOCK`): idea of not turning one-off cases, failures of unknown cause or statements about how a tool works into lasting rules, rewritten in French in the performance analysis prompt, `performance.go` (`perfSystem`).
+
+```
+MIT License
+
+Copyright (c) 2025 Nous Research
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Inspiration only (inspiration seulement)
+
+- **OpenBot** (PolyForm Noncommercial license): its approach to agent memory and self-improvement was a conceptual inspiration for the learned rules of XGrowth Studio. No code, prompt or schema from OpenBot is included, copied or translated in XGrowth Studio.

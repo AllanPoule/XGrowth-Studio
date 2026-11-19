@@ -444,7 +444,7 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 		fmt.Fprintf(&u, "- [%s] (%s, %s) %s\n", l.ID, who, l.CreatedAt.Format("2006-01-02"), learningLine(l))
 	}
 	u.WriteString("</retours>\n")
-	u.WriteString(existingRulesBlock(d, ""))
+	u.WriteString(existingRulesBlock(d, "", 0))
 	u.WriteString("\nPropose les règles (zéro si rien ne se dégage).")
 	var out synthesisOut
 	if err := s.aiFor(d.Account(account)).JSON(ctx, synthesisSystem, u.String(), synthesisSchema, &out); err != nil {
@@ -504,12 +504,43 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 // existingRulesBlock : règles communes et règles apprises de tous statuts,
 // présentées à l'IA pour qu'elle n'en repropose aucune. account vide = toutes
 // les règles apprises ; sinon celles du compte et celles sans compte.
-func existingRulesBlock(d *Data, account string) string {
-	var rules []*RuleProposal
+// maxPast > 0 ne garde que les maxPast règles refusées ou retirées les plus
+// récentes (date de décision, sinon de création) ; les règles en place et
+// proposées sont toutes gardées, dans l'ordre d'origine. maxPast <= 0 : aucune
+// limite (synthèse des retours, inchangée).
+func existingRulesBlock(d *Data, account string, maxPast int) string {
+	var rules, past []*RuleProposal
 	for _, r := range d.RuleProposals {
 		if account == "" || r.Account == "" || strings.EqualFold(r.Account, account) {
 			rules = append(rules, r)
+			if r.Status == RuleRefused || r.Status == RuleRevoked {
+				past = append(past, r)
+			}
 		}
+	}
+	if maxPast > 0 && len(past) > maxPast {
+		at := func(r *RuleProposal) time.Time {
+			if r.DecidedAt != nil {
+				return *r.DecidedAt
+			}
+			return r.CreatedAt
+		}
+		// la plus récente d'abord ; à date égale, la plus tard enregistrée
+		for i, j := 0, len(past)-1; i < j; i, j = i+1, j-1 {
+			past[i], past[j] = past[j], past[i]
+		}
+		sort.SliceStable(past, func(i, j int) bool { return at(past[i]).After(at(past[j])) })
+		drop := map[*RuleProposal]bool{}
+		for _, r := range past[maxPast:] {
+			drop[r] = true
+		}
+		kept := rules[:0:0]
+		for _, r := range rules {
+			if !drop[r] {
+				kept = append(kept, r)
+			}
+		}
+		rules = kept
 	}
 	if len(rules) == 0 && len(d.Settings.Rules) == 0 {
 		return ""
@@ -527,6 +558,10 @@ func existingRulesBlock(d *Data, account string) string {
 }
 
 // DecideRule accepte (texte éventuellement retouché), refuse ou retire une règle.
+// Le texte retouché d'une règle de performance passe ruleTextOK, comme une
+// proposition de l'IA, car il entre ensuite dans chaque demande à l'IA ; les
+// chiffres y restent permis, puisque c'est le propriétaire qui l'écrit. Un
+// texte vide garde celui de la règle. Les règles de retours ne changent pas.
 func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 	var out *RuleProposal
 	err := s.store.Update(func(d *Data) error {
@@ -542,6 +577,11 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 			}
 			if r.Source == RuleSourcePerformance && perfCapReached(d, r.Account) {
 				return fmt.Errorf("%d règles apprises en place pour ce compte au plus : retirez-en une d'abord", perfMaxAccepted)
+			}
+			if r.Source == RuleSourcePerformance && text != "" {
+				if err := ruleTextOK(strings.TrimSpace(text)); err != nil {
+					return fmt.Errorf("texte de la règle refusé : %v", err)
+				}
 			}
 			if t := strings.TrimSpace(text); t != "" {
 				r.Text = t
