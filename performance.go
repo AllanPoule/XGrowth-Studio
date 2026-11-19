@@ -60,7 +60,26 @@ const (
 	// propriétaire écarte sans que le prompt grossisse à chaque refus. Les plus
 	// anciennes restent écartées par la déduplication du code, qui voit tout.
 	perfMaxPastRules = 20
+	// Après un échec de l'appel IA d'un compte, nouvel essai automatique au
+	// bout d'une heure : une panne passagère (délai dépassé, surcharge 529) se
+	// résorbe en général dans ce délai, et un appel par heure coûte peu.
+	perfRetryFirst = time.Hour
+	// Le délai double à chaque échec consécutif (1 h, 2 h, 4 h…) jusqu'à 24 h :
+	// un fournisseur en panne durable (clé invalide, quota épuisé) n'est plus
+	// appelé qu'une fois par jour pour ce compte, soit 5 appels les premières
+	// 24 h (à 0, 1, 3, 7 et 15 h), au lieu d'un par passage du planificateur.
+	perfRetryMax = 24 * time.Hour
 )
+
+// perfRetryDelay : attente avant le nouvel essai automatique d'un compte après
+// son n-ième échec consécutif (n ≥ 1).
+func perfRetryDelay(n int) time.Duration {
+	d := perfRetryFirst
+	for i := 1; i < n && d < perfRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, perfRetryMax)
+}
 
 // PerfSignal : un groupe de posts dont le taux d'engagement médian s'écarte
 // nettement de celui du compte. Tous les chiffres sont calculés par le code.
@@ -409,20 +428,24 @@ func perfRequest(d *Data, a *Account, dg PerfDigest) string {
 //
 // Une erreur de l'IA pour un compte n'arrête pas l'analyse des autres : le
 // compte en échec la porte dans son résultat (Error) et les propositions déjà
-// obtenues sont enregistrées. LastPerfAnalysisAt avance dès qu'un appel IA a
-// été tenté, même en échec, pour que le planificateur ne relance pas l'analyse
-// à chaque passage quand le fournisseur échoue (quota, clé invalide). Si tous
-// les appels tentés échouent, l'analyse renvoie une erreur (pour l'API et la
-// CLI), après avoir enregistré cette date et le journal.
+// obtenues sont enregistrées. Seul l'état des comptes analysés change
+// (PerfState) : un passage réussi, avec ou sans appel IA, date le compte et
+// remet ses échecs à zéro ; un échec de l'appel IA reporte son prochain essai
+// automatique (perfRetryDelay), pour que le planificateur ne rappelle pas un
+// fournisseur en panne à chaque passage. Un compte que l'arrêt du studio a
+// empêché d'analyser garde son état. Si tous les appels tentés échouent,
+// l'analyse renvoie une erreur (pour l'API et la CLI), après avoir enregistré
+// l'état et le journal. L'analyse manuelle (API, CLI, bouton) est immédiate :
+// elle ne tient compte ni de l'attente, ni du rythme hebdomadaire.
 func (s *Studio) AnalyzePerformance(ctx context.Context, account string) (*PerfResult, error) {
 	return s.analyzePerformance(ctx, account, false)
 }
 
 // analyzePerformance fait le travail d'AnalyzePerformance. auto vaut true pour
-// l'analyse lancée par le planificateur (Tick) : si elle échoue entièrement, la
-// ligne de journal qui dit quand aura lieu le nouvel essai est ajoutée dans la
-// même écriture que le reste, car une analyse ne fait qu'un store.Update
-// (§4.3.1).
+// l'analyse lancée par le planificateur (Tick) : seuls les comptes dus
+// (perfAccountDue) sont analysés, et si elle échoue entièrement, la ligne de
+// journal qui dit quand aura lieu le nouvel essai est ajoutée dans la même
+// écriture que le reste, car une analyse ne fait qu'un store.Update (§4.3.1).
 func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bool) (*PerfResult, error) {
 	d := s.store.Snapshot()
 	now := s.now().UTC()
@@ -445,7 +468,14 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 	var todo []*pending
 	attempted := 0   // appels IA tentés, réussis ou non
 	var failed error // première erreur d'un compte
+	// comptes dont l'état change : passage réussi (avec ou sans appel IA) ou
+	// échec de l'appel IA ; un compte interrompu n'est dans aucune des deux
+	var passed, aiFailed []string
+	interrupted := false
 	for _, a := range accounts {
+		if auto && !perfAccountDue(d, a.Name, now) {
+			continue
+		}
 		dg := ComputePerfDigest(d, a.Name, now)
 		ar := &PerfAccountResult{Account: a.Name, Eligible: dg.Eligible, Proposed: []*RuleProposal{}}
 		res.Accounts = append(res.Accounts, ar)
@@ -463,6 +493,7 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 			if failed == nil {
 				failed = ctx.Err()
 			}
+			interrupted = true
 		default:
 			p := &pending{res: ar, dg: dg}
 			attempted++
@@ -471,10 +502,23 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 				if failed == nil {
 					failed = err
 				}
+				// un appel coupé par l'arrêt du studio ne dit rien du
+				// fournisseur : le compte est repris au prochain passage
+				if errors.Is(ctx.Err(), context.Canceled) {
+					interrupted = true
+				} else {
+					aiFailed = append(aiFailed, a.Name)
+				}
 				continue
 			}
 			todo = append(todo, p)
 		}
+		if ar.Skipped != "" || ar.Error == "" {
+			passed = append(passed, a.Name)
+		}
+	}
+	if auto && len(res.Accounts) == 0 {
+		return res, nil // plus aucun compte dû depuis la vérification de Tick
 	}
 	allFailed := failed != nil && len(todo) == 0
 	err := s.store.Update(func(d *Data) error {
@@ -551,10 +595,34 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 				d.AddLog("info", "analyse des performances : %d post(s) mesuré(s), %d règle(s) proposée(s)", ar.Eligible, len(ar.Proposed))
 			}
 		}
-		// la date avance dès qu'un appel a été tenté, même en échec ; une
-		// analyse interrompue avant tout appel ne la change pas. Une analyse
-		// lancée plus tôt qui finit après une autre ne la fait pas reculer
-		// (elle sert au déclenchement hebdomadaire).
+		// état des seuls comptes analysés ; la reprise d'un ancien
+		// data.json vient avant que la date globale ne change
+		if len(passed)+len(aiFailed) > 0 {
+			perfSeedState(d)
+		}
+		for _, name := range passed {
+			st := d.Settings.PerfState[perfKey(name)]
+			// une analyse lancée plus tôt qui finit après une autre ne
+			// fait pas reculer la date du compte
+			if now.After(st.LastAt) {
+				st.LastAt = now
+			}
+			st.Failures, st.NextAt = 0, time.Time{}
+			d.Settings.PerfState[perfKey(name)] = st
+		}
+		var retryAt time.Time // premier nouvel essai d'un compte en échec
+		for _, name := range aiFailed {
+			st := d.Settings.PerfState[perfKey(name)]
+			st.Failures++
+			st.NextAt = now.Add(perfRetryDelay(st.Failures))
+			d.Settings.PerfState[perfKey(name)] = st
+			if retryAt.IsZero() || st.NextAt.Before(retryAt) {
+				retryAt = st.NextAt
+			}
+		}
+		// date globale, pour l'affichage seulement : elle avance dès qu'un
+		// appel a été tenté, même en échec ; une analyse interrompue avant
+		// tout appel ne la change pas, et elle ne recule pas
 		if attempted > 0 || failed == nil {
 			if last := d.Settings.LastPerfAnalysisAt; last == nil || now.After(*last) {
 				d.Settings.LastPerfAnalysisAt = &now
@@ -562,12 +630,11 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 		}
 		if auto && allFailed {
 			// catégorie fixe : le détail de l'erreur n'est pas journalisé.
-			// Le nouvel essai n'est promis au prochain passage que si
-			// l'analyse est encore due après la mise à jour de la date.
-			next := fmt.Sprintf("nouvel essai quand %d jours seront passés et %d nouvelles publications faites",
-				int(perfAutoEvery/(24*time.Hour)), perfAutoMinNewPosts)
-			if perfAnalysisDue(d, now) {
-				next = "nouvel essai au prochain passage"
+			// Un compte interrompu reste dû : il est repris au prochain
+			// passage ; sinon, le premier nouvel essai suit l'attente.
+			next := "nouvel essai au prochain passage"
+			if !interrupted && !retryAt.IsZero() {
+				next = fmt.Sprintf("nouvel essai automatique dans %d h", int(retryAt.Sub(now)/time.Hour))
 			}
 			d.AddLog("error", "analyse des performances : %s, %s", perfErrorKind(failed), next)
 		}
@@ -601,25 +668,70 @@ func perfErrorKind(err error) string {
 	}
 }
 
-// perfAnalysisDue : l'analyse hebdomadaire est-elle due ? Il faut qu'elle soit
-// activée, que la précédente date d'au moins perfAutoEvery (ou n'ait jamais eu
-// lieu) et qu'au moins perfAutoMinNewPosts posts aient été publiés depuis.
-// Comme dans perfEligible, les publications simulées (« dry-… ») ne comptent
-// pas : elles ne seront jamais mesurées.
-func perfAnalysisDue(d *Data, now time.Time) bool {
-	if !d.Settings.AutoPerfAnalysis {
+// perfKey : clé d'un compte dans Settings.PerfState. Les comptes se
+// reconnaissent sans tenir compte de la casse, comme dans Data.Account.
+func perfKey(account string) string { return strings.ToLower(account) }
+
+// perfLastAt : date du dernier passage réussi de l'analyse pour un compte (nil
+// s'il n'y en a jamais eu). Un ancien data.json n'a pas de PerfState : sa date
+// globale LastPerfAnalysisAt vaut alors pour tous les comptes. Dès qu'un état
+// par compte existe, les comptes existants y ont été repris (perfSeedState) et
+// un compte sans état n'a jamais été analysé.
+func perfLastAt(s Settings, account string) *time.Time {
+	if len(s.PerfState) == 0 {
+		return s.LastPerfAnalysisAt
+	}
+	if st := s.PerfState[perfKey(account)]; !st.LastAt.IsZero() {
+		return &st.LastAt
+	}
+	return nil
+}
+
+// perfSeedState : à la première écriture d'un état par compte dans un ancien
+// data.json, chaque compte existant reçoit la date globale comme dernier
+// succès, pour garder le même déclenchement qu'avant (perfLastAt).
+func perfSeedState(d *Data) {
+	if len(d.Settings.PerfState) > 0 {
+		return
+	}
+	d.Settings.PerfState = map[string]PerfAccountState{}
+	if last := d.Settings.LastPerfAnalysisAt; last != nil {
+		for _, a := range d.Accounts {
+			d.Settings.PerfState[perfKey(a.Name)] = PerfAccountState{LastAt: *last}
+		}
+	}
+}
+
+// perfAccountDue : l'analyse automatique d'un compte est-elle due ? Il faut
+// qu'elle soit activée, que l'attente après un échec soit passée, que le
+// dernier passage réussi de ce compte date d'au moins perfAutoEvery (ou n'ait
+// jamais eu lieu) et que ce compte ait publié au moins perfAutoMinNewPosts
+// posts depuis. Comme dans perfEligible, les publications simulées
+// (« dry-… ») ne comptent pas : elles ne seront jamais mesurées.
+func perfAccountDue(d *Data, account string, now time.Time) bool {
+	if !d.Settings.AutoPerfAnalysis || now.Before(d.Settings.PerfState[perfKey(account)].NextAt) {
 		return false
 	}
-	last := d.Settings.LastPerfAnalysisAt
+	last := perfLastAt(d.Settings, account)
 	if last != nil && now.Sub(*last) < perfAutoEvery {
 		return false
 	}
 	n := 0
 	for _, p := range d.Posts {
-		if p.Status == StatusPublished && !strings.HasPrefix(p.TweetID, "dry-") && p.PublishedAt != nil &&
-			(last == nil || p.PublishedAt.After(*last)) {
+		if strings.EqualFold(p.Account, account) && p.Status == StatusPublished && !strings.HasPrefix(p.TweetID, "dry-") &&
+			p.PublishedAt != nil && (last == nil || p.PublishedAt.After(*last)) {
 			n++
 		}
 	}
 	return n >= perfAutoMinNewPosts
+}
+
+// perfAnalysisDue : l'analyse automatique est-elle due pour au moins un compte ?
+func perfAnalysisDue(d *Data, now time.Time) bool {
+	for _, a := range d.Accounts {
+		if perfAccountDue(d, a.Name, now) {
+			return true
+		}
+	}
+	return false
 }

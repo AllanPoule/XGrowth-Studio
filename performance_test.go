@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -968,6 +969,8 @@ func TestAnalyzeKeepsLatestAnalysisDate(t *testing.T) {
 // planificateur. Les 5 premiers passent à 3 jours de la date courante, les
 // autres restent à 10 jours ; tous les relevés sont du jour, pour que
 // RefreshMetrics (appelé par Tick avant l'analyse) ne les remplace pas.
+// lastAnalysis devient la dernière analyse de tous les comptes : l'état par
+// compte est effacé, comme dans un data.json d'avant LOT1-T9.
 func recentPerf(t *testing.T, e *env, lastAnalysis time.Time) {
 	t.Helper()
 	if err := e.st.store.Update(func(d *Data) error {
@@ -980,7 +983,7 @@ func recentPerf(t *testing.T, e *env, lastAnalysis time.Time) {
 			}
 			p.Metrics.UpdatedAt = e.now
 		}
-		d.Settings.LastPerfAnalysisAt = &lastAnalysis
+		d.Settings.LastPerfAnalysisAt, d.Settings.PerfState = &lastAnalysis, nil
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1225,9 +1228,15 @@ func TestAnalyzeKeepsOtherAccountsOnAIError(t *testing.T) {
 			t.Fatalf("règle enregistrée pour %q : %+v", r.Account, r)
 		}
 	}
+	// la date globale avance (affichage), mais elle ne commande plus le
+	// déclenchement (LOT1-T9, défaut A4) : « second » est daté, « main », en
+	// échec, attend une heure son nouvel essai automatique
 	if last := d.Settings.LastPerfAnalysisAt; last == nil || !last.Equal(e.now) {
 		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, e.now)
 	}
+	first := e.now
+	wantState(t, d, "second", first, 0, time.Time{})
+	wantState(t, d, "main", time.Time{}, 1, first.Add(time.Hour))
 	errLines := 0
 	for _, l := range d.Log {
 		if strings.Contains(l.Message, marker) || strings.Contains(l.Message, "clé invalide") {
@@ -1259,10 +1268,16 @@ func TestAnalyzeKeepsOtherAccountsOnAIError(t *testing.T) {
 	if len(perfRules(d)) != 2 {
 		t.Fatalf("aucune règle ne doit s'ajouter : %d", len(perfRules(d)))
 	}
-	// un seul compte demandé, en échec : erreur aussi
+	// chaque compte garde son dernier succès ; l'attente double pour « main »
+	wantState(t, d, "main", time.Time{}, 2, e.now.Add(2*time.Hour))
+	wantState(t, d, "second", first, 1, e.now.Add(time.Hour))
+	// un seul compte demandé, en échec : erreur aussi, et seul son état change
 	if _, err := e.st.AnalyzePerformance(ctx, "second"); err == nil {
 		t.Fatal("compte unique en échec : erreur attendue")
 	}
+	d = e.st.store.Snapshot()
+	wantState(t, d, "second", first, 2, e.now.Add(2*time.Hour))
+	wantState(t, d, "main", time.Time{}, 2, e.now.Add(2*time.Hour))
 
 	// analyse interrompue avant tout appel : aucun appel, date inchangée
 	before := *d.Settings.LastPerfAnalysisAt
@@ -1276,6 +1291,19 @@ func TestAnalyzeKeepsOtherAccountsOnAIError(t *testing.T) {
 	}
 	if last := e.st.store.Snapshot().Settings.LastPerfAnalysisAt; !last.Equal(before) {
 		t.Fatalf("LastPerfAnalysisAt = %v, attendu %v", last, before)
+	}
+	if got, want := e.st.store.Snapshot().Settings.PerfState, d.Settings.PerfState; !reflect.DeepEqual(got, want) {
+		t.Fatalf("état par compte modifié par une analyse interrompue : %+v, attendu %+v", got, want)
+	}
+}
+
+// wantState vérifie l'état d'analyse d'un compte (LOT1-T9).
+func wantState(t *testing.T, d *Data, account string, last time.Time, failures int, next time.Time) {
+	t.Helper()
+	st, ok := d.Settings.PerfState[account]
+	if !ok || !st.LastAt.Equal(last) || st.Failures != failures || !st.NextAt.Equal(next) {
+		t.Fatalf("état de %q = %+v (présent %v), attendu dernier succès %v, %d échec(s), nouvel essai %v",
+			account, st, ok, last, failures, next)
 	}
 }
 
@@ -1335,8 +1363,9 @@ func TestPerfAutoAnalysisFailureLog(t *testing.T) {
 	}
 
 	// analyse automatique en échec total : la ligne du compte et celle du
-	// nouvel essai, qui annonce le délai de sept jours et les cinq nouvelles
-	// publications exigés par perfAnalysisDue
+	// nouvel essai, qui annonce l'attente après un premier échec (1 h). Avant
+	// LOT1-T9, ce test figeait un nouvel essai après sept jours et cinq
+	// nouvelles publications (défaut A3 de l'audit).
 	e.now = e.now.Add(8 * 24 * time.Hour)
 	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
 	if !perfAnalysisDue(e.st.store.Snapshot(), e.now) {
@@ -1351,10 +1380,8 @@ func TestPerfAutoAnalysisFailureLog(t *testing.T) {
 	if len(ls) != 2 {
 		t.Fatalf("Tick : %d ligne(s) de journal, attendu 2 : %+v", len(ls), ls)
 	}
-	want := fmt.Sprintf("nouvel essai quand %d jours seront passés et %d nouvelles publications faites",
-		int(perfAutoEvery/(24*time.Hour)), perfAutoMinNewPosts)
-	if l := ls[1]; l.Level != "error" || !strings.HasSuffix(l.Message, want) || !strings.Contains(want, "7 jours") ||
-		!strings.Contains(want, "5 nouvelles publications") {
+	const want = "nouvel essai automatique dans 1 h"
+	if l := ls[1]; l.Level != "error" || !strings.HasSuffix(l.Message, want) {
 		t.Fatalf("Tick, ligne du nouvel essai : %+v", l)
 	}
 	for _, l := range e.st.store.Snapshot().Log {
@@ -1584,5 +1611,420 @@ func TestCLIRulesAnalyze(t *testing.T) {
 	}
 	if !strings.Contains(usageText, "rules analyze [--account c]") || !strings.Contains(usageText, "--auto-perf-analysis[=false]") {
 		t.Fatal("aide non mise à jour")
+	}
+}
+
+// ---------------------------------------------------------------- état d'analyse par compte (LOT1-T9)
+
+// addPerfAccount : un compte fictif de plus, publié en simulation.
+func addPerfAccount(t *testing.T, e *env, name string) {
+	t.Helper()
+	if err := e.st.SaveAccount(&Account{Name: name, Handle: "@" + name, Backend: "dryrun", Timezone: "UTC",
+		Slots: []string{"09:00"}, DailyLimit: 2}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// recentPosts : les 5 premiers posts du compte passent à 3 jours de la date
+// courante (perfFixture les publie il y a 10 jours) ; les relevés sont du jour.
+func recentPosts(t *testing.T, e *env, account string) {
+	t.Helper()
+	if err := e.st.store.Update(func(d *Data) error {
+		recent, n := e.now.Add(-3*24*time.Hour), 0
+		for _, p := range d.Posts {
+			if p.Account == account && n < 5 {
+				p.PublishedAt = &recent
+				p.Metrics.UpdatedAt = e.now
+				n++
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// freshMetrics : tous les relevés datent de maintenant, pour que
+// RefreshMetrics (appelé par Tick, relevés de plus de 6 h) ne remplace pas
+// les mesures de la fixture avant l'analyse.
+func freshMetrics(t *testing.T, e *env) {
+	t.Helper()
+	if err := e.st.store.Update(func(d *Data) error {
+		for _, p := range d.Posts {
+			if p.Metrics != nil {
+				p.Metrics.UpdatedAt = e.now
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Défaut A1 de l'audit : l'analyse manuelle d'un compte (ici « autre », sans
+// post, donc sans appel IA) ne retarde pas l'analyse automatique d'un autre.
+func TestPerfManualAnalysisOfOneAccountKeepsOthersDue(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	addPerfAccount(t, e, "autre")
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	if !perfAccountDue(e.st.store.Snapshot(), "main", e.now) {
+		t.Fatal("prérequis : l'analyse de main doit être due")
+	}
+	res, err := e.st.AnalyzePerformance(ctx, "autre")
+	if err != nil || res.Accounts[0].Skipped == "" || e.ai.calls != 0 {
+		t.Fatalf("prérequis : analyse de autre ignorée sans appel IA (%v, %+v, %d appels)", err, res, e.ai.calls)
+	}
+	d := e.st.store.Snapshot()
+	wantState(t, d, "autre", e.now, 0, time.Time{})
+	// « main » garde l'ancienne date globale, reprise telle quelle
+	wantState(t, d, "main", e.now.Add(-8*24*time.Hour), 0, time.Time{})
+	e.now = e.now.Add(time.Minute)
+	e.st.Tick(ctx)
+	if e.ai.calls != 1 {
+		t.Fatalf("après l'analyse manuelle de « autre » (0 appel IA), Tick a fait %d appel(s) IA pour « main », attendu 1", e.ai.calls)
+	}
+}
+
+// Défaut A2 de l'audit : les publications d'un compte ne déclenchent pas
+// d'appel IA pour un compte qui n'a rien publié depuis sa dernière analyse.
+func TestPerfAutoAnalysisSkipsAccountWithoutNewPosts(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	addPerfAccount(t, e, "second")
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "second")
+	// recentPerf rend récents les 5 premiers posts (ceux de main) ; ceux de
+	// second restent publiés il y a 10 jours, avant la dernière analyse (-8 j)
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	var asked []string
+	e.ai.fail = func(user string) error {
+		for _, a := range []string{"main", "second"} {
+			if strings.Contains(user, a+"_") {
+				asked = append(asked, a)
+			}
+		}
+		return nil
+	}
+	out := e.st.Tick(ctx)
+	if e.ai.calls != 1 || len(asked) != 1 || asked[0] != "main" {
+		t.Fatalf("Tick : %d appel(s) IA pour %v, attendu 1 pour main", e.ai.calls, asked)
+	}
+	if res, _ := out["perf"].(*PerfResult); res == nil || len(res.Accounts) != 1 || res.Accounts[0].Account != "main" {
+		t.Fatalf("résultat : %+v", out["perf"])
+	}
+	// « second » n'a pas été analysé : il garde l'ancienne date globale
+	wantState(t, e.st.store.Snapshot(), "second", e.now.Add(-8*24*time.Hour), 0, time.Time{})
+}
+
+// Défaut A3 de l'audit : après une panne passagère, l'analyse automatique est
+// retentée une heure plus tard, sans rappeler l'IA à chaque passage.
+func TestPerfTransientAIFailureRetriedWithinHours(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	e.ai.fail = func(string) error { return context.DeadlineExceeded }
+	start := e.now
+	e.st.Tick(ctx)
+	if e.ai.calls != 1 {
+		t.Fatalf("prérequis : 1 appel en échec, obtenu %d", e.ai.calls)
+	}
+	wantState(t, e.st.store.Snapshot(), "main", start.Add(-8*24*time.Hour), 1, start.Add(time.Hour))
+	e.ai.fail = nil // le fournisseur est revenu
+	// un passage par minute : rien avant l'heure, le nouvel essai à l'heure
+	for m := 1; m <= 24*60; m++ {
+		e.now = start.Add(time.Duration(m) * time.Minute)
+		e.st.Tick(ctx)
+		if want := 1 + min(1, m/60); e.ai.calls != want {
+			t.Fatalf("%d min après la panne : %d appel(s) IA, attendu %d", m, e.ai.calls, want)
+		}
+	}
+	wantState(t, e.st.store.Snapshot(), "main", start.Add(time.Hour), 0, time.Time{})
+	// le rythme normal reprend : 8 jours plus tard, sans 5 nouvelles
+	// publications depuis le succès, pas d'appel
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	e.st.Tick(ctx)
+	if e.ai.calls != 2 {
+		t.Fatalf("sans nouvelle publication : %d appel(s) IA, attendu 2", e.ai.calls)
+	}
+}
+
+// Défaut A4 de l'audit : « main » réussit, « second » échoue (erreur
+// passagère) ; seul « second » est retenté, une heure plus tard. Les posts de
+// second sont rendus récents ici (le test de l'audit ne le faisait que pour
+// main) : sans cela, second n'est pas dû (défaut A2 corrigé).
+func TestPerfPartialFailureRetriesOnlyFailedAccount(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	addPerfAccount(t, e, "second")
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "second")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	recentPosts(t, e, "second")
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	mainCalls, secondCalls := 0, 0
+	down := true
+	e.ai.fail = func(user string) error {
+		if strings.Contains(user, "main_") {
+			mainCalls++
+		}
+		if strings.Contains(user, "second_") {
+			secondCalls++
+			if down {
+				return errors.New("HTTP 529 surchargé (fictif)")
+			}
+		}
+		return nil
+	}
+	start := e.now
+	e.st.Tick(ctx)
+	if mainCalls != 1 || secondCalls != 1 || len(perfRules(e.st.store.Snapshot())) == 0 {
+		t.Fatalf("prérequis : main réussit, second échoue une fois (main=%d, second=%d)", mainCalls, secondCalls)
+	}
+	d := e.st.store.Snapshot()
+	wantState(t, d, "main", start, 0, time.Time{})
+	wantState(t, d, "second", start.Add(-8*24*time.Hour), 1, start.Add(time.Hour))
+	down = false
+	for h := 1; h <= 24; h++ {
+		e.now = start.Add(time.Duration(h) * time.Hour)
+		e.st.Tick(ctx)
+	}
+	if mainCalls != 1 || secondCalls != 2 {
+		t.Fatalf("24 h plus tard : main=%d appel(s), second=%d, attendu 1 et 2", mainCalls, secondCalls)
+	}
+	d = e.st.store.Snapshot()
+	wantState(t, d, "main", start, 0, time.Time{})
+	wantState(t, d, "second", start.Add(time.Hour), 0, time.Time{})
+}
+
+// Défaut A4 de l'audit, second cas : l'arrêt du studio pendant l'analyse
+// automatique laisse les comptes restants dus, sans attente.
+func TestPerfShutdownKeepsRemainingAccountsDue(t *testing.T) {
+	e := newEnv(t)
+	addPerfAccount(t, e, "second")
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "second")
+	recentPerf(t, e, e.now.Add(-8*24*time.Hour))
+	recentPosts(t, e, "second")
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	ctx, cancel := context.WithCancel(context.Background())
+	var asked []string
+	e.ai.fail = func(user string) error {
+		for _, a := range []string{"main", "second"} {
+			if strings.Contains(user, a+"_") {
+				asked = append(asked, a)
+			}
+		}
+		cancel() // l'arrêt arrive pendant l'appel pour main, qui aboutit
+		return nil
+	}
+	start := e.now
+	e.st.Tick(ctx)
+	if len(asked) != 1 || asked[0] != "main" {
+		t.Fatalf("premier passage : appels %v, attendu main seul", asked)
+	}
+	d := e.st.store.Snapshot()
+	wantState(t, d, "main", start, 0, time.Time{})
+	wantState(t, d, "second", start.Add(-8*24*time.Hour), 0, time.Time{})
+	// redémarrage une minute plus tard : second est repris tout de suite
+	e.now = start.Add(time.Minute)
+	e.st.Tick(context.Background())
+	if len(asked) != 2 || asked[1] != "second" {
+		t.Fatalf("après le redémarrage : appels %v, attendu main puis second", asked)
+	}
+	wantState(t, e.st.store.Snapshot(), "second", e.now, 0, time.Time{})
+}
+
+// Critère 2 de LOT1-T9 : un compte ajouté alors que les autres ont un
+// historique est analysé dès qu'il remplit ses propres conditions.
+func TestPerfNewAccountAnalyzedOnItsOwnConditions(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	perfFixture(t, e, "main")
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	freshMetrics(t, e)
+	start := e.now
+	if e.st.Tick(ctx); e.ai.calls != 1 {
+		t.Fatalf("main jamais analysé, 10 posts : %d appel(s) IA, attendu 1", e.ai.calls)
+	}
+	e.now = start.Add(time.Hour)
+	addPerfAccount(t, e, "nouveau")
+	perfFixture(t, e, "nouveau") // 10 posts publiés il y a 10 jours
+	freshMetrics(t, e)
+	if !perfAccountDue(e.st.store.Snapshot(), "nouveau", e.now) || perfAccountDue(e.st.store.Snapshot(), "main", e.now) {
+		t.Fatal("seul le nouveau compte doit être dû")
+	}
+	out := e.st.Tick(ctx)
+	if res, _ := out["perf"].(*PerfResult); e.ai.calls != 2 || res == nil || len(res.Accounts) != 1 ||
+		res.Accounts[0].Account != "nouveau" || !strings.Contains(e.ai.lastMsg, "nouveau_") {
+		t.Fatalf("nouveau compte : %d appel(s) IA, résultat %+v", e.ai.calls, out["perf"])
+	}
+	d := e.st.store.Snapshot()
+	wantState(t, d, "main", start, 0, time.Time{})
+	wantState(t, d, "nouveau", e.now, 0, time.Time{})
+	e.now = e.now.Add(time.Minute)
+	if e.st.Tick(ctx); e.ai.calls != 2 {
+		t.Fatalf("passage suivant : %d appel(s) IA, attendu 2", e.ai.calls)
+	}
+}
+
+// Critère 3 de LOT1-T9 : fournisseur en échec permanent pour « main »,
+// planificateur toutes les 60 s pendant 24 h. Les appels IA pour main suivent
+// l'attente croissante : à 0, 1, 3, 7 et 15 h, soit 5 appels (le suivant
+// tomberait à 31 h). « second » est analysé une fois et son état ne bouge plus.
+func TestPerfPermanentFailureBackoffOver24h(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	addPerfAccount(t, e, "second")
+	perfFixture(t, e, "main")
+	perfFixture(t, e, "second")
+	// publiés il y a 20 jours : RefreshMetrics (dans Tick) ne relève pas les
+	// posts de plus de 14 jours, les mesures de la fixture restent
+	if err := e.st.store.Update(func(d *Data) error {
+		pub := e.now.Add(-20 * 24 * time.Hour)
+		for _, p := range d.Posts {
+			p.PublishedAt = &pub
+			p.Metrics.UpdatedAt = pub.Add(72 * time.Hour)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.tune(t, nil, func(s *Settings) { s.AutoPerfAnalysis = true })
+	start := e.now
+	var mainAt []time.Duration
+	secondCalls := 0
+	e.ai.fail = func(user string) error {
+		switch {
+		case strings.Contains(user, "main_"):
+			mainAt = append(mainAt, e.now.Sub(start))
+			return errors.New("HTTP 503 indisponible (fictif)")
+		case strings.Contains(user, "second_"):
+			secondCalls++
+		}
+		return nil
+	}
+	var second PerfAccountState
+	for m := 0; m <= 24*60; m++ {
+		e.now = start.Add(time.Duration(m) * time.Minute)
+		e.st.Tick(ctx)
+		if m == 0 {
+			second = e.st.store.Snapshot().Settings.PerfState["second"]
+		}
+	}
+	want := []time.Duration{0, time.Hour, 3 * time.Hour, 7 * time.Hour, 15 * time.Hour}
+	if !reflect.DeepEqual(mainAt, want) {
+		t.Fatalf("appels IA pour main aux instants %v, attendu %v", mainAt, want)
+	}
+	if secondCalls != 1 || e.ai.calls != len(want)+1 {
+		t.Fatalf("second : %d appel(s), total %d, attendu 1 et %d", secondCalls, e.ai.calls, len(want)+1)
+	}
+	d := e.st.store.Snapshot()
+	if got := d.Settings.PerfState["second"]; got != second || !got.LastAt.Equal(start) {
+		t.Fatalf("état de second modifié : %+v, attendu %+v", got, second)
+	}
+	wantState(t, d, "main", time.Time{}, 5, start.Add(15*time.Hour+16*time.Hour))
+	t.Logf("compte en échec permanent : %d appels IA en 24 h, à %v", len(mainAt), mainAt)
+}
+
+// perfRetryDelay double à chaque échec et plafonne à 24 h.
+func TestPerfRetryDelay(t *testing.T) {
+	for n, want := range map[int]time.Duration{1: time.Hour, 2: 2 * time.Hour, 3: 4 * time.Hour, 4: 8 * time.Hour,
+		5: 16 * time.Hour, 6: 24 * time.Hour, 7: 24 * time.Hour, 100: 24 * time.Hour} {
+		if got := perfRetryDelay(n); got != want {
+			t.Errorf("perfRetryDelay(%d) = %v, attendu %v", n, got, want)
+		}
+	}
+}
+
+// Critère 4 de LOT1-T9 : un ancien data.json qui n'a que lastPerfAnalysisAt
+// se charge, sa date commande le déclenchement de chaque compte, et la
+// première analyse la reprend dans l'état par compte.
+func TestPerfLegacyLastAnalysisDateDrivesTrigger(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	legacy := `{"version":1,"settings":{"aiProvider":"claude-code","effort":"medium","competitors":[],"bannedPhrases":[],"minGapMinutes":90,"triageMinScore":6,"maxItemsPerRun":40,"onboarded":true,
+"autoPerfAnalysis":true,"lastPerfAnalysisAt":"2026-11-12T08:00:00Z"},
+"accounts":[{"name":"main","handle":"moi","backend":"dryrun","timezone":"UTC","slots":["09:00"],"dailyLimit":3,"watch":[]},
+{"name":"second","handle":"second","backend":"dryrun","timezone":"UTC","slots":["09:00"],"dailyLimit":3,"watch":[]}],
+"posts":[],"items":[],"learnings":[],"log":[],"auth":{}}`
+	path := filepath.Join(dir, "data.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &env{ai: &fakeAI{}, x: &fakeX{}, now: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC)}
+	e.st = NewStudio(store)
+	e.st.ai = func(Settings) AI { return e.ai }
+	e.st.backendFor = func(*Account) (XBackend, error) { return e.x, nil }
+	e.st.now = func() time.Time { return e.now }
+	legacyAt := time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
+	if s := store.Snapshot().Settings; s.PerfState != nil || s.LastPerfAnalysisAt == nil || !s.LastPerfAnalysisAt.Equal(legacyAt) || !s.AutoPerfAnalysis {
+		t.Fatalf("ancien fichier mal chargé : %+v", s)
+	}
+	perfFixture(t, e, "main") // 10 posts publiés il y a 10 jours
+	recentPosts(t, e, "main") // dont 5 il y a 3 jours, après l'ancienne date
+	freshMetrics(t, e)
+	if b, _ := os.ReadFile(path); strings.Contains(string(b), `"perfState"`) {
+		t.Fatal("état par compte écrit sans analyse")
+	}
+	// ancienne date à 6 jours : pas due
+	if perfAnalysisDue(store.Snapshot(), e.now) {
+		t.Fatal("6 jours depuis l'ancienne date globale : pas due")
+	}
+	if e.st.Tick(ctx); e.ai.calls != 0 {
+		t.Fatalf("%d appel(s) IA, attendu 0", e.ai.calls)
+	}
+	// un jour plus tard : 7 jours et 5 posts de main depuis, main est dû ;
+	// second, sans post, ne l'est pas
+	e.now = e.now.Add(24 * time.Hour)
+	freshMetrics(t, e)
+	d := store.Snapshot()
+	if !perfAccountDue(d, "main", e.now) || perfAccountDue(d, "second", e.now) {
+		t.Fatal("7 jours et 5 posts depuis l'ancienne date : seul main est dû")
+	}
+	if e.st.Tick(ctx); e.ai.calls != 1 || !strings.Contains(e.ai.lastMsg, "main_") {
+		t.Fatalf("%d appel(s) IA, attendu 1 pour main", e.ai.calls)
+	}
+	d = store.Snapshot()
+	wantState(t, d, "main", e.now, 0, time.Time{})
+	wantState(t, d, "second", legacyAt, 0, time.Time{}) // reprise de l'ancienne date
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `"perfState"`) {
+		t.Fatal("état par compte non enregistré dans data.json")
+	}
+}
+
+// /api/settings : l'état par compte est tenu par le serveur ; un client ne
+// peut ni le créer ni l'écraser (même piège que LastPerfAnalysisAt).
+func TestAPISettingsKeepPerfState(t *testing.T) {
+	srv, e := tuningServer(t)
+	c := &http.Client{}
+	body := `{"autoPerfAnalysis":true,"perfState":{"main":{"lastAt":"2020-01-01T00:00:00Z","failures":9}}}`
+	if st, m := call(t, c, "POST", srv.URL+"/api/settings", body); st != 200 {
+		t.Fatalf("réglages refusés : %v", m)
+	}
+	if s := e.st.store.Snapshot().Settings; !s.AutoPerfAnalysis || s.PerfState != nil {
+		t.Fatalf("état créé par le client : %+v", s.PerfState)
+	}
+	last, next := e.now.Add(-time.Hour), e.now.Add(time.Hour)
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Settings.PerfState = map[string]PerfAccountState{"main": {LastAt: last, Failures: 1, NextAt: next}}
+		return nil
+	})
+	body = `{"perfState":{"main":{"lastAt":"2020-01-01T00:00:00Z","failures":9},"autre":{"failures":3}}}`
+	if st, m := call(t, c, "POST", srv.URL+"/api/settings", body); st != 200 {
+		t.Fatalf("réglages refusés : %v", m)
+	}
+	want := map[string]PerfAccountState{"main": {LastAt: last, Failures: 1, NextAt: next}}
+	if got := e.st.store.Snapshot().Settings.PerfState; !reflect.DeepEqual(got, want) {
+		t.Fatalf("PerfState = %+v, attendu %+v", got, want)
 	}
 }
