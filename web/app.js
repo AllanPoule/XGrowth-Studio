@@ -706,13 +706,16 @@ function rulesBlock() {
     ${old.length ? `<details class="tune" style="margin-top:10px"><summary>Règles refusées ou retirées (${old.length})</summary><table>${old.map(row).join("")}</table></details>` : ""}`;
 }
 
-// bilan de POST /api/rules/analyze : nombre de règles proposées, sinon la
-// raison de l'abandon de chaque compte (texte brut : toast l'échappe)
+// bilan de POST /api/rules/analyze : nombre de règles proposées, suivi de
+// chaque compte en échec avec sa catégorie (a.error ne contient jamais le
+// message du fournisseur) ; sans proposition, l'issue de chaque compte
+// (texte brut : toast l'échappe)
 function perfMsg(r) {
   const accs = r?.accounts || [], n = accs.reduce((t, a) => t + (a.proposed || []).length, 0);
-  if (n) return `${n} règle(s) proposée(s)`;
   if (!accs.length) return "Aucun compte à analyser";
-  return accs.map(a => `@${handleOf(a.account)} : ${a.skipped || "aucune règle nouvelle"}`).join(" · ");
+  const failed = a => `@${handleOf(a.account)} : analyse en échec (${a.error})`;
+  if (n) return [`${n} règle(s) proposée(s)`, ...accs.filter(a => a.error).map(failed)].join(" · ");
+  return accs.map(a => a.error ? failed(a) : `@${handleOf(a.account)} : ${a.skipped || "aucune règle nouvelle"}`).join(" · ");
 }
 
 function vSettings(v) {
