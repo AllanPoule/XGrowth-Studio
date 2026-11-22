@@ -119,6 +119,25 @@ const isLI = n => acct(n)?.platform === "linkedin";
 const maxLen = n => isLI(n) ? 3000 : acct(n)?.premium ? 4000 : 280;
 const LINES = ["perso", "kinflux", "allan-drdrt"];
 const linePill = p => p.line ? `<span class="pill accent" title="Ligne éditoriale">${esc(p.line)}</span>` : "";
+// LinkedIn : état de connexion (jamais le jeton, que le navigateur ne voit pas)
+const liConn = n => S.linkedin?.accounts?.[n] || { state: "disconnected" };
+const LI_STATE = { connected: ["Connecté", "ok"], expiring: ["Expire bientôt", "warn"], expired: ["Expiré", "bad"], disconnected: ["Non connecté", "warn"] };
+function liPill(a) {
+  if (a.backend !== "linkedin") return "";
+  const c = liConn(a.name), [l, cls] = LI_STATE[c.state] || LI_STATE.disconnected;
+  const days = c.daysLeft != null && c.state !== "expired" ? ` · ${c.daysLeft} j` : "";
+  return `<span class="pill ${cls}" title="Connexion LinkedIn">${l}${days}</span>`;
+}
+// bannière non fermable : un compte en API LinkedIn dont le jeton expire, a expiré ou manque
+function liBanner() {
+  return (S.accounts || []).filter(a => a.platform === "linkedin" && a.backend === "linkedin" && liConn(a.name).state !== "connected").map(a => {
+    const c = liConn(a.name);
+    const msg = c.state === "expired" ? "a expiré : les posts programmés attendent la reconnexion (ou publiez à la main)"
+      : c.state === "expiring" ? `expire dans ${c.daysLeft} jour(s) : reconnectez-le avant l'échéance`
+        : "n'est pas connecté : rien ne partira avant la connexion";
+    return `<div class="card" role="alert" style="border-color:var(--warn)"><div class="row"><span class="pill warn">LinkedIn</span><div><b>${esc(a.displayName || a.name)}</b> ${msg}.</div><span class="spacer"></span><button class="btn sm primary" data-act="li-connect" data-name="${esc(a.name)}">${c.state === "disconnected" ? "Se connecter" : "Reconnecter"}</button></div></div>`;
+  }).join("");
+}
 // affiner l'IA : types de posts et consignes effectifs d'un compte (compte → commun → défaut)
 const typesFor = a => (a?.postTypes?.length ? a.postTypes : S.settings.postTypes) || [];
 const typeLabel = (accName, key) => typesFor(acct(accName)).find(t => t.key === key)?.label || key;
@@ -147,9 +166,19 @@ async function boot() {
     [S, P] = await Promise.all([api("/api/state"), api("/api/providers")]);
     if (!S.settings.onboarded) return wizard.start();
     render();
+    liReturn();
   } catch (e) {
     $("#root").innerHTML = `<div class="authbox"><div class="card"><h3>Studio injoignable</h3><p class="muted">${esc(e.message)}</p><button class="btn" onclick="location.reload()">Réessayer</button></div></div>`;
   }
+}
+
+// retour de la connexion LinkedIn : /?linkedin=connected|cancelled|refused|identity|error
+function liReturn() {
+  const v = new URLSearchParams(location.search).get("linkedin");
+  if (!v) return;
+  history.replaceState(null, "", location.pathname + location.hash);
+  const msg = { connected: "LinkedIn connecté", cancelled: "Connexion LinkedIn annulée", refused: "LinkedIn a refusé l'autorisation", identity: "Ce compte est déjà lié à un autre membre LinkedIn", error: "La connexion LinkedIn a échoué (voir le journal)" }[v];
+  if (msg) toast(msg, v !== "connected" && v !== "cancelled");
 }
 
 // Thème : « auto » (défaut) suit le système, « light » et « dark » le forcent.
@@ -244,6 +273,7 @@ function render() {
   </div>`;
   const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments };
   (views[r] || vHome)($("#view"));
+  $("#view").insertAdjacentHTML("afterbegin", liBanner());
 }
 
 // ------------------------------------------------------------------ composants
@@ -270,7 +300,7 @@ function tweetCard(p, mode) {
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
-      ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
+      ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}${li && (p.status === "scheduled" || p.status === "validated") ? `<button class="btn sm" data-act="to-manual" data-id="${p.id}" title="Ne pas publier par l'API : vous publiez vous-même sur LinkedIn">Publier à la main</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
 }
 
@@ -734,7 +764,7 @@ function vSettings(v) {
       <div id="ai-out"></div></div>
     <h2>Comptes X</h2>${S.accounts.map(accountForm).join("")}
     <div class="card"><div class="row between"><div><h3>Ajouter un compte</h3><p class="small muted" style="margin:0">L'assistant vous guide : connexion à X, voix, rythme.</p></div><button class="btn" data-act="wizard-account">Ajouter</button></div></div>
-    <div class="card"><div class="row between"><div><h3>Ajouter un compte LinkedIn</h3><p class="small muted" style="margin:0">Une ligne éditoriale par compte (perso, kinflux, allan-drdrt). Publication à la main ou simulation pour l'instant.</p></div><button class="btn" data-act="add-linkedin">Ajouter</button></div></div>
+    <div class="card"><div class="row between"><div><h3>Ajouter un compte LinkedIn</h3><p class="small muted" style="margin:0">Une ligne éditoriale par compte (perso, kinflux, allan-drdrt). Publication par l'API officielle (après « Se connecter »), à la main ou en simulation.</p></div><button class="btn" data-act="add-linkedin">Ajouter</button></div></div>
     <h2>Affiner l'IA</h2>
     <div class="card" id="tune-common"><p class="small muted" style="margin-top:0">Valable pour tous les comptes. Chaque compte peut remplacer ces réglages (Comptes X › Modifier › Affiner l'IA pour ce compte).</p>
       <label class="l" for="rules">Règles d'écriture communes</label><textarea id="rules" rows="4" placeholder="Une règle par ligne. Ex. : N'invente jamais un chiffre.">${esc((s.rules || []).join("\n"))}</textarea>
@@ -837,11 +867,12 @@ function accountForm(a) {
 function linkedinAccountForm(a) {
   const be = { manual: "Publication à la main", dryrun: "Simulation", linkedin: "API LinkedIn" }[a.backend] || a.backend;
   return `<div class="card" data-acc="${esc(a.name)}">
-    <div class="row"><div class="av sm">in</div><div><b>${esc(a.displayName || a.name)}</b> <span class="pill accent">${esc(a.line)}</span><div class="small muted">LinkedIn · ${be} · ${esc(a.timezone)} · ${(a.slots || []).join(", ")}</div></div><span class="spacer"></span>
+    <div class="row"><div class="av sm">in</div><div><b>${esc(a.displayName || a.name)}</b> <span class="pill accent">${esc(a.line)}</span><div class="small muted">LinkedIn · ${be} · ${esc(a.timezone)} · ${(a.slots || []).join(", ")} ${liPill(a)}</div></div><span class="spacer"></span>
+      ${a.backend === "linkedin" ? `<button class="btn sm primary" data-act="li-connect" data-name="${esc(a.name)}">${liConn(a.name).state === "disconnected" ? "Se connecter" : "Reconnecter"}</button>` : ""}
       <button class="btn sm" data-act="acc-check" data-name="${esc(a.name)}">${I.shield} Vérifier la connexion</button><button class="btn sm ghost" data-act="acc-toggle">Modifier</button></div>
     <div class="acc-body hidden">
       <div class="grid"><div><label class="l">Ligne éditoriale</label><select name="line">${LINES.map(l => `<option ${a.line === l ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-        <div><label class="l">Publication</label><select name="backend">${[["manual", "À la main (repli sûr)"], ["dryrun", "Simulation"]].map(([k, l]) => `<option value="${k}" ${a.backend === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <div><label class="l">Publication</label><select name="backend">${[["linkedin", "API LinkedIn (officielle)"], ["manual", "À la main (repli sûr)"], ["dryrun", "Simulation"]].map(([k, l]) => `<option value="${k}" ${a.backend === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
         <div><label class="l">Fuseau horaire</label><input name="timezone" value="${esc(a.timezone)}"></div>
         <div><label class="l">Créneaux</label><input name="slots" value="${esc((a.slots || []).join(", "))}"></div></div>
       <div class="hint">Un post LinkedIn ne part jamais sans votre validation signée. Limite : 3 000 caractères. Statistiques indisponibles.</div>
@@ -913,6 +944,17 @@ const actions = {
     const line = (prompt("Ligne éditoriale : " + LINES.join(", ")) || "").trim();
     if (!line) return;
     await run(b, () => api("/api/accounts", { name: "linkedin-" + line, platform: "linkedin", line, backend: "manual", language: "français", timezone: "Europe/Paris", slots: ["09:00", "12:30", "18:00"] }), "Compte LinkedIn ajouté");
+  },
+  async "li-connect"(b) {
+    await run(b, async () => {
+      const r = await api("/api/linkedin/connect?account=" + encodeURIComponent(b.dataset.name));
+      if (!/^https:\/\/www\.linkedin\.com\//.test(r.url)) throw new Error("adresse de connexion inattendue");
+      location.href = r.url;
+    }, null, { noReload: true });
+  },
+  async "to-manual"(b) {
+    if (!confirm("Ce post ne partira plus par l'API : vous le publierez vous-même sur LinkedIn, puis vous le marquerez comme publié. Continuer ?")) return;
+    await run(b, () => api(`/api/posts/${b.dataset.id}/manual`, {}), "À publier à la main");
   },
   async "mark-published"(b) { const url = (prompt("Lien du post LinkedIn (facultatif) :") || "").trim(); await run(b, () => api(`/api/posts/${b.dataset.id}/mark-published`, { url }), "Marqué comme publié") },
   async unschedule(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/unschedule`, {}), "Renvoyé en brouillon") },

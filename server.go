@@ -79,6 +79,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		return body, true
 	}
 	gate.routes(mux, decode)
+	registerLinkedIn(mux, st, gate)
 
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		d := st.store.Snapshot()
@@ -111,6 +112,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"campaigns":          orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
 			"commentsDefault": DefaultCommentsPrompt,
 			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes, "linkedin": map[string]any{"maxChars": linkedinMaxChars, "lines": linkedinLines}},
+			"linkedin":        map[string]any{"configured": st.liCfg().configured(), "accounts": st.linkedinStates(d)},
 			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
@@ -217,6 +219,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/posts/{id}/mark-published", func(r *http.Request, b map[string]any) (any, error) {
 		return st.MarkPublished(r.PathValue("id"), s(b, "url"))
+	})
+	post("/api/posts/{id}/manual", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SendToManual(r.PathValue("id"))
 	})
 	post("/api/posts/{id}/reject", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Reject(r.PathValue("id"), s(b, "reason"))

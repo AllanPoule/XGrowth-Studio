@@ -57,7 +57,7 @@ func TestLinkedInSaveAccountTable(t *testing.T) {
 		{"li-defaut", "linkedin", "allan-drdrt", "", true},
 		{"li-sans-ligne", "linkedin", "", "manual", false},
 		{"li-ligne-inconnue", "linkedin", "pro", "manual", false},
-		{"li-api-pas-branche", "linkedin", "perso", "linkedin", false},
+		{"li-api", "linkedin", "perso", "linkedin", true},
 		{"li-backend-x", "linkedin", "perso", "agentx", false},
 		{"x-ok", "x", "", "dryrun", true},
 		{"x-vide", "", "", "xapi", true},

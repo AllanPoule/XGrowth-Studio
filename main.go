@@ -371,6 +371,17 @@ func main() {
 		check(err)
 		emit(p)
 
+	case "to-manual":
+		p, err := st.SendToManual(need(a, 0, "to-manual <id>"))
+		check(err)
+		emit(p)
+
+	case "linkedin":
+		if a.arg(0) != "status" && a.arg(0) != "" {
+			fail("invalid_input", fmt.Errorf("usage : xgrowth linkedin status"))
+		}
+		emit(map[string]any{"configured": st.liCfg().configured(), "accounts": st.linkedinStates(store.Snapshot())})
+
 	case "metrics":
 		n, err := st.RefreshMetrics(ctx, 0)
 		res := map[string]any{"updated": n}
@@ -1031,7 +1042,7 @@ X : agentx (session navigateur), API X officielle ou dryrun (simulation).
 
 COMPTES
   account add <nom> [--platform x|linkedin] [--line perso|kinflux|allan-drdrt (LinkedIn, obligatoire)]
-                    [--handle h] [--backend agentx|xapi|dryrun | manual|dryrun (LinkedIn)] [--agentx-account n] [--token-env VAR]
+                    [--handle h] [--backend agentx|xapi|dryrun | linkedin|manual|dryrun (LinkedIn)] [--agentx-account n] [--token-env VAR]
                     [--tz Europe/Paris] [--slots 09:00,12:30,18:00] [--lang français] [--premium]
                     [--voice "..."] [--instructions "..."] [--topics a,b] [--triage-rules "..."]
                     [--auto-triage] [--auto-draft] [--daily-limit 6]
@@ -1103,6 +1114,8 @@ VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   move <id> <AAAA-MM-JJ>                 premier créneau libre de ce jour, selon la programmation du compte
   calendar [--days 14]
   publish-due                            publie ce qui est dû (un passage)
+  linkedin status                        LinkedIn : état de connexion (jamais le jeton) ; la connexion se fait dans le studio
+  to-manual <id>                         LinkedIn : un post validé passe en « à publier à la main » (jeton expiré)
   mark-published <id> [--url <lien>]     LinkedIn : marque « publié » un post publié à la main (statut manual)
   metrics                                rafraîchit les statistiques des posts publiés
   run [--every 60]                       planificateur : publication, veille, tri, statistiques
