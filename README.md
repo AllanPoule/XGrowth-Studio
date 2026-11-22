@@ -168,6 +168,38 @@ fenêtre de sa campagne, sans occuper les créneaux des posts du compte. **Rien 
 Avant chaque envoi, XGrowth vérifie que la session connectée correspond bien au handle du compte. Un post ne part
 jamais depuis le mauvais compte.
 
+## LinkedIn : publication par l'API officielle
+
+Un compte `platform: linkedin` publie par l'API officielle « Share on LinkedIn » (scope `w_member_social`), sans
+session de navigateur. Programmation, créneaux, fenêtre horaire et historique fonctionnent comme sur X ; LinkedIn
+n'offre pas de programmation native : le studio garde l'heure et publie lui-même à l'échéance (il doit donc tourner,
+`serve` ou `run`).
+
+**Rien ne part sans votre validation signée** : le contrôle existe dans `Validate`, dans `PublishDue` et dans le
+backend LinkedIn lui-même. Les commentaires restent des brouillons.
+
+1. Créez une app LinkedIn avec le produit « Share on LinkedIn » et « Sign In with LinkedIn using OpenID Connect »,
+   et enregistrez l'URL de redirection `https://<votre-studio>/auth/linkedin/callback` (HTTPS obligatoire).
+2. Fournissez ces variables d'environnement au studio (par votre coffre de secrets, jamais dans le dépôt) :
+
+   | Variable | Rôle |
+   |---|---|
+   | `LINKEDIN_CLIENT_ID` | identifiant de l'app |
+   | `LINKEDIN_CLIENT_SECRET` | secret de l'app |
+   | `LINKEDIN_REDIRECT_URI` | l'URL de redirection enregistrée ci-dessus |
+   | `LINKEDIN_API_VERSION` | facultative, version `AAAAMM` de l'API (défaut `202611`, à relire chaque trimestre) |
+
+3. Réglages › compte LinkedIn : publication « API LinkedIn », puis **Se connecter**. Le jeton est écrit dans
+   `$XGROWTH_HOME/linkedin.json` (0600), jamais dans `data.json`, l'API du studio, les journaux ou la CLI.
+
+Le jeton dure 60 jours et ne se renouvelle pas tout seul : le studio affiche l'état de connexion (pastille,
+bannière « Reconnecter ») et écrit un avertissement dans le journal à J-14, J-7, J-3, J-1 et à l'expiration.
+Jeton expiré à l'heure prévue : le post reste programmé et part à la reconnexion ; au-delà de 24 h de retard il
+repasse en brouillon à revalider. « Publier à la main » (CLI `to-manual <id>`) bascule un post validé vers la
+publication manuelle. `xgrowth linkedin status` affiche l'état sans jamais montrer le jeton.
+
+Limites : 3 000 caractères, pas de statistiques ni de veille LinkedIn, aucune relance automatique d'un envoi.
+
 ## Sources
 
 Dans la fiche de chaque compte, **Sources de ce compte** ajoute des sources à la veille. Les réglages communs des

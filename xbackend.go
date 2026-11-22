@@ -51,10 +51,15 @@ type PostRequest struct {
 	ReplyTo   string
 	QuoteOf   string
 	MediaPath string
+	MediaAlt  string // LinkedIn : texte alternatif de l'image
+	// ValidatedBy : signature de la validation. Le backend LinkedIn refuse
+	// tout envoi sans elle (troisième barrière, après Validate et PublishDue).
+	ValidatedBy string
 }
 
 // Profile est le compte X réellement connecté derrière un backend.
 type Profile struct {
+	ID             string `json:"id,omitempty"` // LinkedIn : identifiant du membre
 	ScreenName     string `json:"screenName"`
 	Name           string `json:"name"`
 	FollowersCount int    `json:"followersCount"`
@@ -80,9 +85,9 @@ func BackendFor(a *Account) (XBackend, error) {
 		case "dryrun", "":
 			return &dryrunBackend{linkedin: true}, nil
 		case "linkedin":
-			return nil, errors.New("le backend linkedin (publication par l'API) n'est pas encore branché : utilisez manual ou dryrun")
+			return newLinkedInBackend(a, liTokens{dir: homeDir()}, liConfigFromEnv(), time.Now), nil
 		}
-		return nil, fmt.Errorf("backend %q inconnu pour LinkedIn (manual ou dryrun)", a.Backend)
+		return nil, fmt.Errorf("backend %q inconnu pour LinkedIn (linkedin, manual ou dryrun)", a.Backend)
 	}
 	switch a.Backend {
 	case "agentx":

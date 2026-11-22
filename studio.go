@@ -21,21 +21,31 @@ type Studio struct {
 	ai         func(s Settings) AI
 	backendFor func(a *Account) (XBackend, error)
 	now        func() time.Time
+	// liCfg : l'app LinkedIn (environnement ; adresses de test dans les tests)
+	liCfg func() liConfig
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
 }
 
 func NewStudio(store *Store) *Studio {
-	return &Studio{
-		store:      store,
-		ai:         NewAI,
-		backendFor: BackendFor,
-		now:        time.Now,
+	s := &Studio{
+		store: store,
+		ai:    NewAI,
+		now:   time.Now,
+		liCfg: liConfigFromEnv,
 		logf: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "xgrowth : "+format+"\n", args...)
 		},
 	}
+	// le backend LinkedIn lit ses jetons dans le dossier de données de CE studio
+	s.backendFor = func(a *Account) (XBackend, error) {
+		if isLinkedIn(a) && a.Backend == "linkedin" {
+			return s.newLinkedInBackend(a), nil
+		}
+		return BackendFor(a)
+	}
+	return s
 }
 
 // aiSettings renvoie les réglages d'IA, fournisseur détecté si non choisi.
@@ -85,11 +95,9 @@ func (s *Studio) SaveAccount(a *Account) error {
 		switch a.Backend {
 		case "":
 			a.Backend = "dryrun"
-		case "manual", "dryrun":
-		case "linkedin":
-			return errors.New("le backend linkedin (publication par l'API) n'est pas encore disponible : utilisez manual ou dryrun")
+		case "manual", "dryrun", "linkedin":
 		default:
-			return fmt.Errorf("backend %q inconnu pour LinkedIn : manual ou dryrun", a.Backend)
+			return fmt.Errorf("backend %q inconnu pour LinkedIn : linkedin, manual ou dryrun", a.Backend)
 		}
 		if a.WeeklyCap < 0 {
 			return errors.New("le plafond hebdomadaire ne peut pas être négatif")
@@ -135,9 +143,16 @@ func (s *Studio) SaveAccount(a *Account) error {
 			if a.Watch == nil {
 				a.Watch = old.Watch
 			}
+			// l'auteur LinkedIn vient de la connexion OAuth, jamais d'un formulaire
+			if isLinkedIn(a) && isLinkedIn(old) {
+				a.AuthorURN = old.AuthorURN
+			} else if isLinkedIn(a) {
+				a.AuthorURN = ""
+			}
 			*old = *a
 			return nil
 		}
+		a.AuthorURN = "" // posé uniquement par la connexion OAuth
 		d.Accounts = append(d.Accounts, a)
 		return nil
 	})
@@ -214,6 +229,10 @@ func (s *Studio) CheckAccount(ctx context.Context, name string) (*CheckResult, e
 	switch {
 	case a.Backend == "dryrun" || a.Backend == "manual":
 		r.OK = true
+	case a.Backend == "linkedin":
+		if r.OK = p.ID != ""; !r.OK {
+			r.Problem = "LinkedIn n'a pas renvoyé de membre connecté"
+		}
 	case p.ScreenName == "":
 		r.Problem = "le backend n'a pas renvoyé de compte connecté"
 	case a.Handle != "" && !strings.EqualFold(p.ScreenName, a.Handle):
@@ -697,6 +716,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 	for _, id := range due {
 		var post Post
 		var acct Account
+		var prev string // statut avant la réservation
 		skip := ""
 		err := s.store.Update(func(d *Data) error {
 			p := d.Post(id)
@@ -735,6 +755,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				skip = p.Error
 				return nil
 			}
+			prev = p.Status
 			p.Status = StatusPublishing
 			post, acct = *p, *a
 			return nil
@@ -755,8 +776,12 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				err = fmt.Errorf("envoi annulé : le backend est connecté en tant que @%s, pas @%s", me.ScreenName, acct.Handle)
 			}
 		}
+		if err == nil && isLinkedIn(&acct) && acct.Backend == "linkedin" {
+			// identité du membre derrière le jeton, vérifiée avant chaque envoi
+			_, err = be.Me(ctx)
+		}
 		if err == nil {
-			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath})
+			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath, ValidatedBy: post.ValidatedBy})
 		}
 		r := PublishResult{PostID: id, Account: acct.Name}
 		_ = s.store.Update(func(d *Data) error {
@@ -766,6 +791,20 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			}
 			t := s.now().UTC()
 			p.UpdatedAt = t
+			if errors.Is(err, errLinkedInExpired) || errors.Is(err, errLinkedInDisconnected) {
+				// jeton inutilisable : rien n'a été envoyé. Le post attend la
+				// reconnexion ; trop en retard, il revient en brouillon pour
+				// être revalidé (Allan garde la main).
+				if p.ScheduledAt != nil && t.Sub(*p.ScheduledAt) > linkedinLateAfter {
+					resetValidation(p)
+					p.Error = "trop en retard (jeton LinkedIn inutilisable), à revalider"
+					d.AddLog("warn", "post %s (LinkedIn, %s) renvoyé en brouillon : trop en retard, à revalider", id, p.Line)
+				} else {
+					p.Status, p.Error = prev, err.Error()
+				}
+				r.Status, r.Error = "skipped", p.Error
+				return nil
+			}
 			if errors.Is(err, errManualPublish) {
 				// pas une panne : le post reste validé, daté, et attend Allan
 				p.Status, p.Error = StatusManual, errManualPublish.Error()
@@ -1098,6 +1137,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	out := map[string]any{"at": s.now().UTC()}
 	if r := s.PublishDue(ctx); len(r) > 0 {
 		out["published"] = r
+	}
+	if n := s.LinkedInExpiryWatch(); n > 0 {
+		out["linkedinAlerts"] = n
 	}
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r

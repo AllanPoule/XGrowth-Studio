@@ -4,6 +4,15 @@ Toutes les évolutions notables de XGrowth Studio. Une version correspond à une
 V0.05 est la cinquième. Le numéro affiché dans le studio (Réglages) et par `xgrowth version` est celui de la
 dernière version.
 
+## Non publié
+
+### Ajouté
+- **LinkedIn, lot 2** : connexion OAuth (`/api/linkedin/connect`, `/auth/linkedin/callback`), publication par
+  l'API officielle (texte et image) à l'heure programmée après validation, état de connexion du jeton, alertes
+  d'expiration (J-14, J-7, J-3, J-1, expiration) dans le journal, `xgrowth linkedin status` et `to-manual <id>`.
+  Variables d'environnement : `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI`,
+  `LINKEDIN_API_VERSION` (facultative). Le jeton est stocké dans `linkedin.json` (0600).
+
 ## V0.10 — 19 novembre 2026
 
 [PR n°16](https://github.com/AllanPoule/XGrowth-Studio/pull/16) · Mémoire persistante et auto-amélioration : lot 1
