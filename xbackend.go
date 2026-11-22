@@ -73,6 +73,17 @@ type XBackend interface {
 }
 
 func BackendFor(a *Account) (XBackend, error) {
+	if isLinkedIn(a) {
+		switch a.Backend {
+		case "manual":
+			return manualBackend{}, nil
+		case "dryrun", "":
+			return &dryrunBackend{linkedin: true}, nil
+		case "linkedin":
+			return nil, errors.New("le backend linkedin (publication par l'API) n'est pas encore branché : utilisez manual ou dryrun")
+		}
+		return nil, fmt.Errorf("backend %q inconnu pour LinkedIn (manual ou dryrun)", a.Backend)
+	}
 	switch a.Backend {
 	case "agentx":
 		return &agentxBackend{bin: agentxBin(), account: a.AgentxAccount}, nil
@@ -431,14 +442,17 @@ func (b *xapiBackend) Tweet(ctx context.Context, id string) (*Tweet, error) {
 
 var dryCounter atomic.Int64
 
-type dryrunBackend struct{}
+type dryrunBackend struct{ linkedin bool }
 
 func (dryrunBackend) Name() string { return "dryrun" }
 func (dryrunBackend) Me(context.Context) (*Profile, error) {
 	return &Profile{ScreenName: "", Name: "simulation"}, nil
 }
-func (dryrunBackend) Post(_ context.Context, r PostRequest) (string, error) {
+func (b dryrunBackend) Post(_ context.Context, r PostRequest) (string, error) {
 	n := dryCounter.Add(1)
+	if b.linkedin {
+		return fmt.Sprintf("urn:li:share:dryrun-%d", n), nil
+	}
 	return fmt.Sprintf("dry-%d-%d", time.Now().Unix(), n), nil
 }
 func (dryrunBackend) Search(context.Context, string, int) ([]Tweet, error)    { return nil, nil }
@@ -446,6 +460,30 @@ func (dryrunBackend) UserPosts(context.Context, string, int) ([]Tweet, error) { 
 func (dryrunBackend) Bookmarks(context.Context, int) ([]Tweet, error)         { return nil, nil }
 func (dryrunBackend) Tweet(_ context.Context, id string) (*Tweet, error) {
 	return &Tweet{ID: id}, nil
+}
+
+// ---------------------------------------------------------------- manual (LinkedIn)
+
+// errManualPublish : le backend manuel n'envoie rien ; PublishDue range le post
+// en « manual » (à publier à la main), jamais en « failed ».
+var errManualPublish = errors.New("à publier à la main sur LinkedIn")
+
+// manualBackend ne contacte aucun service : il sert de repli (jeton expiré) et
+// de mode d'essai sûr. Seul Post est utile, et il renvoie toujours errManualPublish.
+type manualBackend struct{}
+
+func (manualBackend) Name() string { return "manual" }
+func (manualBackend) Me(context.Context) (*Profile, error) {
+	return &Profile{Name: "publication manuelle"}, nil
+}
+func (manualBackend) Post(context.Context, PostRequest) (string, error) {
+	return "", errManualPublish
+}
+func (manualBackend) Search(context.Context, string, int) ([]Tweet, error)    { return nil, nil }
+func (manualBackend) UserPosts(context.Context, string, int) ([]Tweet, error) { return nil, nil }
+func (manualBackend) Bookmarks(context.Context, int) ([]Tweet, error)         { return nil, nil }
+func (manualBackend) Tweet(_ context.Context, id string) (*Tweet, error) {
+	return nil, errors.New("LinkedIn : lecture indisponible")
 }
 
 // parseTweetID accepte un identifiant ou une URL x.com/twitter.com.

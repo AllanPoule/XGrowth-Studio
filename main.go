@@ -366,6 +366,11 @@ func main() {
 	case "publish-due":
 		emit(st.PublishDue(ctx))
 
+	case "mark-published":
+		p, err := st.MarkPublished(need(a, 0, "mark-published <id> [--url <lien du post>]"), a.str("url"))
+		check(err)
+		emit(p)
+
 	case "metrics":
 		n, err := st.RefreshMetrics(ctx, 0)
 		res := map[string]any{"updated": n}
@@ -545,7 +550,7 @@ func calendar(d *Data, days int, now time.Time) []CalendarDay {
 	for _, p := range d.Posts {
 		var t *time.Time
 		switch p.Status {
-		case StatusScheduled, StatusValidated, StatusPublishing:
+		case StatusScheduled, StatusValidated, StatusPublishing, StatusManual:
 			t = p.ScheduledAt
 		case StatusPublished:
 			t = p.PublishedAt
@@ -587,6 +592,12 @@ func applyAccountFlags(acc *Account, a args) {
 	}
 	if a.has("backend") {
 		acc.Backend = a.str("backend")
+	}
+	if a.has("platform") {
+		acc.Platform = a.str("platform")
+	}
+	if a.has("line") {
+		acc.Line = a.str("line")
 	}
 	if a.has("agentx-account") {
 		acc.AgentxAccount = a.str("agentx-account")
@@ -1019,7 +1030,8 @@ Données : $XGROWTH_HOME (défaut ~/.xgrowth). IA : Claude Code, Codex, Gemini C
 X : agentx (session navigateur), API X officielle ou dryrun (simulation).
 
 COMPTES
-  account add <nom> [--handle h] [--backend agentx|xapi|dryrun] [--agentx-account n] [--token-env VAR]
+  account add <nom> [--platform x|linkedin] [--line perso|kinflux|allan-drdrt (LinkedIn, obligatoire)]
+                    [--handle h] [--backend agentx|xapi|dryrun | manual|dryrun (LinkedIn)] [--agentx-account n] [--token-env VAR]
                     [--tz Europe/Paris] [--slots 09:00,12:30,18:00] [--lang français] [--premium]
                     [--voice "..."] [--instructions "..."] [--topics a,b] [--triage-rules "..."]
                     [--auto-triage] [--auto-draft] [--daily-limit 6]
@@ -1091,6 +1103,7 @@ VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   move <id> <AAAA-MM-JJ>                 premier créneau libre de ce jour, selon la programmation du compte
   calendar [--days 14]
   publish-due                            publie ce qui est dû (un passage)
+  mark-published <id> [--url <lien>]     LinkedIn : marque « publié » un post publié à la main (statut manual)
   metrics                                rafraîchit les statistiques des posts publiés
   run [--every 60]                       planificateur : publication, veille, tri, statistiques
   serve [--addr 127.0.0.1:8787] [--host studio.exemple.fr] [--no-auth] [--no-scheduler]

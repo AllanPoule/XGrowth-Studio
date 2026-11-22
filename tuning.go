@@ -98,8 +98,18 @@ func lengthOf(a *Account) string {
 	return "court"
 }
 
+// Longueurs visées sur LinkedIn (en caractères, bien sous la limite de 3 000).
+var linkedinLengths = map[string]string{
+	"court": "courte : environ 300 à 600 caractères, une seule idée",
+	"moyen": "moyenne : environ 600 à 1 200 caractères, une seule idée développée",
+	"long":  "longue : environ 1 200 à 2 000 caractères, une seule idée, en courts paragraphes",
+}
+
 func lengthLine(a *Account) string {
 	l := lengthOf(a)
+	if isLinkedIn(a) {
+		return "Longueur visée : " + linkedinLengths[l] + ".\n"
+	}
 	s := "Longueur visée : " + lengths[l]
 	if l != "court" && !a.Premium {
 		s += " ; sans X Premium, reste sous 280 caractères"

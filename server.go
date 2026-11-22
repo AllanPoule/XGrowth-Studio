@@ -110,7 +110,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"feedbackCategories": FeedbackCategories,
 			"campaigns":          orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
 			"commentsDefault": DefaultCommentsPrompt,
-			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes},
+			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes, "linkedin": map[string]any{"maxChars": linkedinMaxChars, "lines": linkedinLines}},
 			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
@@ -214,6 +214,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			at = &t
 		}
 		return st.Validate(r.PathValue("id"), s(b, "by"), at, bl(b, "now"))
+	})
+	post("/api/posts/{id}/mark-published", func(r *http.Request, b map[string]any) (any, error) {
+		return st.MarkPublished(r.PathValue("id"), s(b, "url"))
 	})
 	post("/api/posts/{id}/reject", func(r *http.Request, b map[string]any) (any, error) {
 		return st.Reject(r.PathValue("id"), s(b, "reason"))

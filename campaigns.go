@@ -363,6 +363,10 @@ func (s *Studio) RunCampaign(ctx context.Context, id string, force bool) Campaig
 		r.Error = fmt.Sprintf("compte %q inconnu", c.Account)
 		return r
 	}
+	if isLinkedIn(a) {
+		r.Skipped = "campagnes indisponibles sur LinkedIn"
+		return r
+	}
 	now := s.now()
 	loc := location(a)
 	if !force {
@@ -542,7 +546,7 @@ func (s *Studio) qualify(ctx context.Context, d *Data, a *Account, c *Campaign, 
 				dismissed++
 				continue
 			}
-			p := s.newPost(a.Name, "reply", reply, x.Reason)
+			p := s.newPost(a, "reply", reply, x.Reason)
 			p.ReplyTo, p.TargetText, p.CampaignID, p.AIText = x.TweetID, x.Text, c.ID, reply
 			d.Posts = append(d.Posts, p)
 			x.Status, x.PainID, x.PostID, x.DraftedAt = CandDrafted, o.PainID, p.ID, &now
