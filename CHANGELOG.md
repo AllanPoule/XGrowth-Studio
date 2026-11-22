@@ -13,6 +13,14 @@ dernière version.
   Variables d'environnement : `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI`,
   `LINKEDIN_API_VERSION` (facultative). Le jeton est stocké dans `linkedin.json` (0600).
 
+- **LinkedIn, lot 3** : méthode d'écriture adaptée de linkedin-skills (MIT, voir `THIRD_PARTY_NOTICES.md`), toujours
+  pliée à la voix du compte et lancée sur demande : accroches, humanizer (appliqué seulement sur clic), audit,
+  plan 7 jours (des idées, jamais des posts). Contrôle anti-tics d'IA déterministe, obligatoire avant la validation
+  d'un post LinkedIn (`tics <id>`, `validate --ack-tics`). Étiquette de ligne modifiable (`line <id> <ligne>`) et
+  filtre par ligne. Plafond de posts par semaine réglé par Allan (`--weekly-cap`, 0 = aucun, lundi à dimanche dans le
+  fuseau du compte). Visuel vérifié à l'enregistrement (JPG, PNG, GIF, 10 Mo, 36 152 320 pixels) avec texte
+  alternatif, publié avec le post ; avertissement si une idée de visuel n'a pas d'image.
+
 ## V0.10 — 19 novembre 2026
 
 [PR n°16](https://github.com/AllanPoule/XGrowth-Studio/pull/16) · Mémoire persistante et auto-amélioration : lot 1

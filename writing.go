@@ -458,6 +458,7 @@ func nextWindowSlot(d *Data, a *Account, after time.Time, skipID string) (time.T
 			taken = append(taken, *p.PublishedAt)
 		}
 	}
+	capTimes := weekPostTimes(d, a, skipID)
 	soon := after.Add(time.Minute)
 	base := after.In(loc)
 	for day := 0; day < 60; day++ {
@@ -476,6 +477,9 @@ func nextWindowSlot(d *Data, a *Account, after time.Time, skipID string) (time.T
 		}
 		if a.DailyLimit > 0 && n >= a.DailyLimit {
 			continue
+		}
+		if weekFull(a, capTimes, dd) {
+			continue // plafond hebdomadaire atteint : semaine suivante
 		}
 		var cand time.Time
 		switch {

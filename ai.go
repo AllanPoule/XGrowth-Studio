@@ -205,6 +205,9 @@ func systemPrompt(a *Account, d *Data) string {
 	}
 	b.WriteString("\nÉcris comme une personne, pas comme une marque : une idée par post, concrète, sans hashtags en rafale ni emojis décoratifs, sans formule creuse d'introduction ou de conclusion. N'invente aucun chiffre, citation ou fait que tu ne tiens pas des éléments fournis.\n")
 	b.WriteString(placeholderRule)
+	if isLinkedIn(a) {
+		b.WriteString(liCrossPromoLine(a) + "\n")
+	}
 	if ls := d.LearningsFor(a.Name, 25); len(ls) > 0 {
 		b.WriteString("\n<retours_du_proprietaire>\nRetours donnés sur des brouillons précédents, à respecter (les corrections montrent ce qu'il coupe, reformule ou ajoute) :\n")
 		for _, l := range ls {
@@ -265,6 +268,9 @@ func GenerateDrafts(ctx context.Context, ai AI, a *Account, d *Data, req DraftRe
 		}
 	}
 	visual := PromptFor(a, d.Settings, "visual")
+	if visual == "" && isLinkedIn(a) {
+		visual = liVisualGuide // sur LinkedIn, une idée de visuel est toujours demandée
+	}
 	var u strings.Builder
 	fmt.Fprintf(&u, "Propose %d brouillons de posts distincts (angles différents).\n", n)
 	if req.Brief != "" {

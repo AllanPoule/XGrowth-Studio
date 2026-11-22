@@ -42,6 +42,10 @@ func (e *env) liDraft(t *testing.T, text string) *Post {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// le contrôle anti-tics (lot 3) précède toute validation d'un post LinkedIn
+	if p, err = e.st.CheckTics(p.ID); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -583,6 +587,9 @@ func TestMarkPublishedHandler(t *testing.T) {
 	p, _ := st.AddDraft("pro", "via http", "", "", "")
 	if code, _ := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/mark-published", `{}`); code == 200 {
 		t.Fatal("un brouillon ne peut pas être marqué publié")
+	}
+	if code, m := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/tics", `{}`); code != http.StatusOK {
+		t.Fatalf("%d %v", code, m)
 	}
 	if code, m := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/validate", `{"by":"Allan","now":true}`); code != http.StatusOK {
 		t.Fatalf("%d %v", code, m)

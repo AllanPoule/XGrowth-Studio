@@ -198,7 +198,46 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		return st.EditPost(r.PathValue("id"), s(b, "text"))
 	})
 	post("/api/posts/{id}/media", func(r *http.Request, b map[string]any) (any, error) {
-		return st.SetMedia(r.PathValue("id"), s(b, "path"))
+		id := r.PathValue("id")
+		if _, ok := b["path"]; ok || b["alt"] == nil {
+			if _, err := st.SetMedia(id, s(b, "path")); err != nil {
+				return nil, err
+			}
+		}
+		if _, ok := b["alt"]; ok {
+			return st.SetMediaAlt(id, s(b, "alt"))
+		}
+		return st.store.Snapshot().Post(id), nil
+	})
+	// ---- LinkedIn : méthode (aides sur demande, aucune n'écrit seule) et contrôles
+	post("/api/posts/{id}/tics", func(r *http.Request, b map[string]any) (any, error) {
+		p, err := st.CheckTics(r.PathValue("id"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"post": p, "tics": orEmpty(p.Tics), "needsAck": len(highTics(p.Tics)) > 0}, nil
+	})
+	post("/api/posts/{id}/line", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SetLine(r.PathValue("id"), s(b, "line"))
+	})
+	post("/api/posts/{id}/hooks", func(r *http.Request, b map[string]any) (any, error) {
+		hooks, err := st.SuggestHooks(r.Context(), r.PathValue("id"))
+		return map[string]any{"hooks": orEmpty(hooks)}, err
+	})
+	post("/api/posts/{id}/hooks/apply", func(r *http.Request, b map[string]any) (any, error) {
+		return st.ApplyHook(r.PathValue("id"), s(b, "hook"))
+	})
+	post("/api/posts/{id}/humanize", func(r *http.Request, b map[string]any) (any, error) {
+		return st.Humanize(r.Context(), r.PathValue("id"))
+	})
+	post("/api/posts/{id}/humanize/apply", func(r *http.Request, b map[string]any) (any, error) {
+		return st.ApplyHumanized(r.PathValue("id"), s(b, "text"))
+	})
+	post("/api/posts/{id}/audit", func(r *http.Request, b map[string]any) (any, error) {
+		return st.Audit(r.Context(), r.PathValue("id"))
+	})
+	post("/api/accounts/{name}/plan-week", func(r *http.Request, b map[string]any) (any, error) {
+		return st.PlanWeek(r.Context(), r.PathValue("name"))
 	})
 	post("/api/posts/{id}/rewrite", func(r *http.Request, b map[string]any) (any, error) {
 		if s(b, "feedback") == "" {
@@ -215,7 +254,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			}
 			at = &t
 		}
-		return st.Validate(r.PathValue("id"), s(b, "by"), at, bl(b, "now"))
+		return st.ValidateWith(r.PathValue("id"), s(b, "by"), at, bl(b, "now"), ValidateOptions{AckTics: bl(b, "ackTics")})
 	})
 	post("/api/posts/{id}/mark-published", func(r *http.Request, b map[string]any) (any, error) {
 		return st.MarkPublished(r.PathValue("id"), s(b, "url"))

@@ -152,3 +152,86 @@ func (s *Studio) MoveToDay(id, day string) (*Post, error) {
 	})
 	return out, err
 }
+
+// ---------------------------------------------------------------- plafond hebdomadaire
+
+// weekStart : le lundi 00:00 de la semaine de t, dans le fuseau du compte.
+func weekStart(t time.Time, loc *time.Location) time.Time {
+	t = t.In(loc)
+	back := (int(t.Weekday()) + 6) % 7 // lundi = 0
+	return time.Date(t.Year(), t.Month(), t.Day()-back, 0, 0, 0, 0, loc)
+}
+
+// countsForCap : seuls les posts du compte comptent dans le plafond (les
+// réponses et commentaires, comme les réponses de campagne, n'y entrent pas).
+func countsForCap(p *Post) bool {
+	return p.CampaignID == "" && (p.Kind == "post" || p.Kind == "")
+}
+
+// weekPostTimes : les dates des posts du compte qui occupent la semaine
+// (programmés, validés, en cours d'envoi, à publier à la main, publiés).
+// skipID écarte le post que l'on est en train de placer.
+func weekPostTimes(d *Data, a *Account, skipID string) []time.Time {
+	var out []time.Time
+	for _, p := range d.Posts {
+		if p.Account != a.Name || p.ID == skipID || !countsForCap(p) {
+			continue
+		}
+		switch {
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
+			out = append(out, *p.ScheduledAt)
+		case p.Status == StatusPublished && p.PublishedAt != nil:
+			out = append(out, *p.PublishedAt)
+		}
+	}
+	return out
+}
+
+// weekFull : la semaine (lundi-dimanche, fuseau du compte) de `day` a-t-elle
+// déjà atteint le plafond d'Allan ? Sans plafond (0), jamais.
+func weekFull(a *Account, times []time.Time, day time.Time) bool {
+	if a.WeeklyCap <= 0 {
+		return false
+	}
+	loc := location(a)
+	ws := weekStart(day, loc)
+	we := ws.AddDate(0, 0, 7)
+	n := 0
+	for _, t := range times {
+		if !t.Before(ws) && t.Before(we) {
+			n++
+		}
+	}
+	return n >= a.WeeklyCap
+}
+
+// errWeekFull : message de refus d'une date imposée dans une semaine pleine.
+func errWeekFull(a *Account, at time.Time) error {
+	ws := weekStart(at, location(a))
+	return fmt.Errorf("plafond de %d post(s) atteint la semaine du %s", a.WeeklyCap, ws.Format("02/01/2006"))
+}
+
+// weeklyOccupied : posts déjà partis ou en route dans la semaine de `now`
+// (publiés, en cours d'envoi, à publier à la main) : un post échu les compte.
+func weeklyOccupied(d *Data, a *Account, now time.Time, skipID string) int {
+	loc := location(a)
+	ws := weekStart(now, loc)
+	we := ws.AddDate(0, 0, 7)
+	n := 0
+	for _, p := range d.Posts {
+		if p.Account != a.Name || p.ID == skipID || !countsForCap(p) {
+			continue
+		}
+		var t *time.Time
+		switch p.Status {
+		case StatusPublished:
+			t = p.PublishedAt
+		case StatusPublishing, StatusManual:
+			t = p.ScheduledAt
+		}
+		if t != nil && !t.Before(ws) && t.Before(we) {
+			n++
+		}
+	}
+	return n
+}

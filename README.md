@@ -200,6 +200,23 @@ publication manuelle. `xgrowth linkedin status` affiche l'état sans jamais mont
 
 Limites : 3 000 caractères, pas de statistiques ni de veille LinkedIn, aucune relance automatique d'un envoi.
 
+### Écrire sur LinkedIn : méthode, anti-tics, ligne, plafond, visuel
+
+- **Contrôle anti-tics** : avant la validation d'un post LinkedIn, le studio repère (sans IA) les formulations
+  typiques d'un texte d'IA. Le contrôle porte sur le texte courant et tombe à la moindre modification. Les tics de
+  sévérité haute (contraste « ce n'est pas X, c'est Y », ouvertures creuses, annonces, clôtures-appâts,
+  enthousiasme creux) bloquent la validation tant qu'Allan n'a pas coché « je garde ces formulations ».
+- **Aides de méthode** (sur demande seulement) : accroches, humanizer, audit, plan 7 jours, adaptées de
+  [linkedin-skills](https://github.com/sergebulaev/linkedin-skills) (MIT). La voix du compte l'emporte toujours ;
+  rien n'est appliqué sans clic « Appliquer ». Le plan 7 jours crée des idées, jamais des posts.
+- **Ligne** (`perso`, `kinflux`, `allan-drdrt`) : obligatoire sur chaque post, modifiable sur un brouillon, sans
+  promotion croisée entre les lignes.
+- **Plafond hebdomadaire** : réglé par Allan sur le compte (`--weekly-cap N`), sans valeur par défaut, du lundi au
+  dimanche dans le fuseau du compte. Les créneaux sautent les semaines pleines.
+- **Visuel** : image JPG, PNG ou GIF (10 Mo au plus, moins de 36 152 320 pixels), vérifiée à l'enregistrement, avec
+  texte alternatif, publiée avec le post. Une idée de visuel est toujours proposée ; la valider sans image est
+  possible (avertissement).
+
 ## Sources
 
 Dans la fiche de chaque compte, **Sources de ce compte** ajoute des sources à la veille. Les réglages communs des

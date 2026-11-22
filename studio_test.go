@@ -63,6 +63,12 @@ func (f *fakeAI) JSON(_ context.Context, system, user string, schema map[string]
 			}
 		}
 		resp = map[string]any{"drafts": drafts}
+	case props["hooks"] != nil:
+		resp = map[string]any{"hooks": []string{"Première accroche", "Deuxième accroche", "Troisième accroche", "Quatrième de trop"}}
+	case props["suggestions"] != nil:
+		resp = map[string]any{"suggestions": []map[string]string{{"area": "accroche", "advice": "Resserrer la première ligne."}}}
+	case props["changes"] != nil:
+		resp = map[string]any{"text": "Texte humanisé", "changes": []string{"Tiret long remplacé par une virgule."}}
 	case props["ideas"] != nil:
 		resp = map[string]any{"ideas": []map[string]string{
 			{"title": "Idée A", "angle": "angle A", "why": "pourquoi A"},

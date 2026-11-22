@@ -299,9 +299,31 @@ function tweetCard(p, mode) {
         ${url ? `<a class="small" href="${esc(url)}" target="_blank" rel="noopener">${li ? "Voir sur LinkedIn" : "Voir sur X"} ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
+      ${(p.warnings || []).map(w => `<div class="tw-why">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')}<span><b>Avertissement :</b> ${esc(w)}</span></div>`).join("")}
+      ${li && editable ? liTools(p) : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
       ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}${li && (p.status === "scheduled" || p.status === "validated") ? `<button class="btn sm" data-act="to-manual" data-id="${p.id}" title="Ne pas publier par l'API : vous publiez vous-même sur LinkedIn">Publier à la main</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
+}
+
+// LinkedIn : ligne, visuel et aides de méthode d'un brouillon. Les aides ne
+// modifient rien : seul « Appliquer » écrit dans le texte.
+const TIC_SEV = { haute: "bad", moyenne: "warn" };
+const ticsHTML = tics => (tics || []).length ? `<ul class="small" style="margin:6px 0 0 18px">${tics.map(t => `<li><span class="pill ${TIC_SEV[t.severity] || ""}">${esc(t.severity)}</span> ${esc(t.rule)} : « ${esc(t.excerpt)} »</li>`).join("")}</ul>` : `<div class="small muted">Aucun tic repéré.</div>`;
+function liTools(p) {
+  return `<div class="tw-why" style="display:block">
+    <div class="row"><label class="small muted">Ligne</label><select data-line="${p.id}" style="width:auto">${LINES.map(l => `<option ${p.line === l ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <span class="spacer"></span><span class="small muted">Aides (sur demande)</span>
+      <button class="btn sm ghost" data-act="li-hooks" data-id="${p.id}">Accroches</button>
+      <button class="btn sm ghost" data-act="li-humanize" data-id="${p.id}">Humanizer</button>
+      <button class="btn sm ghost" data-act="li-audit" data-id="${p.id}">Audit</button>
+      <button class="btn sm ghost" data-act="li-tics" data-id="${p.id}">Contrôle anti-tics</button></div>
+    <div class="row" style="margin-top:8px"><input data-media="${p.id}" value="${esc(p.mediaPath || "")}" placeholder="Visuel : chemin du fichier sur le serveur (JPG, PNG, GIF, 10 Mo)" style="flex:1;width:auto">
+      <input data-alt="${p.id}" value="${esc(p.mediaAlt || "")}" placeholder="Texte alternatif (120 caractères conseillés)" style="flex:1;width:auto">
+      <button class="btn sm" data-act="li-media" data-id="${p.id}">${I.image} Enregistrer le visuel</button></div>
+    ${p.visualBrief && !p.mediaPath ? `<div class="small muted" style="margin-top:6px">Un visuel est proposé mais aucune image n'est associée : le post partira sans image si vous validez.</div>` : ""}
+    ${p.ticCheckedAt ? `<div style="margin-top:6px"><span class="small muted">Dernier contrôle anti-tics :</span>${ticsHTML(p.tics)}</div>` : ""}
+    <div data-li-out="${p.id}" style="margin-top:8px"></div></div>`;
 }
 
 function queueActions(p) {
@@ -467,10 +489,18 @@ function typeOptions(accName) {
     types.map(t => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("");
 }
 
+// filtre par ligne éditoriale LinkedIn (liste et calendrier)
+function lineFilter() {
+  if (!(S.accounts || []).some(a => a.platform === "linkedin")) return "";
+  const cur = store.get("lineFilter", "");
+  return `<select data-line-filter style="width:auto" aria-label="Filtrer par ligne"><option value="">Toutes les lignes</option>${LINES.map(l => `<option ${cur === l ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+}
+
 function vQueue(v) {
-  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId).slice().reverse();
-  v.innerHTML = `<div class="head"><div><h1>À valider</h1><p>Relisez, retouchez, validez. Rien ne part sur X sans votre feu vert.</p></div>
-    <div class="row"><span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
+  const lf = store.get("lineFilter", "");
+  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && (!lf || p.line === lf)).slice().reverse();
+  v.innerHTML = `<div class="head"><div><h1>À valider</h1><p>Relisez, retouchez, validez. Rien ne part sur X ni sur LinkedIn sans votre feu vert.</p></div>
+    <div class="row">${lineFilter()}<span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
     ${ps.length ? ps.map(p => tweetCard(p, "edit")).join("") : empty(I.check, "Tout est validé", "Aucun brouillon en attente.", `<a class="btn primary" href="#/compose">${I.spark} Créer des posts</a>`)}`;
   $("#who", v).oninput = e => store.set("who", e.target.value.trim());
   $$("[data-edit]", v).forEach(ta => {
@@ -501,7 +531,7 @@ function vCompose(v) {
 
 const IDEA_STATUS = { proposed: ["Proposée", "warn"], kept: ["Retenue", "ok"], drafted: ["Rédigée", ""], dismissed: ["Écartée", ""] };
 function ideaBank() {
-  const accs = S.accounts.filter(a => a.ideas?.enabled);
+  const accs = S.accounts.filter(a => a.ideas?.enabled || (S.ideas || []).some(i => i.account === a.name));
   if (!accs.length) return `<h2>Banque d'idées</h2><div class="card"><p class="small muted" style="margin:0">L'IA peut vous proposer des idées de posts originaux (angle et intérêt pour votre audience), que vous retenez ou écartez avant de les faire rédiger. Activez « Proposer des idées de posts originaux » dans Réglages › votre compte › Affiner l'IA.</p></div>`;
   const cur = accs.find(a => a.name === store.get("acc", "")) || accs[0];
   const ideas = (S.ideas || []).filter(i => accs.some(a => a.name === i.account) && i.status !== "dismissed").slice().reverse();
@@ -511,7 +541,7 @@ function ideaBank() {
     <div class="row" style="margin-top:8px"><span class="small faint">@${esc(handleOf(i.account))} · ${rel(i.createdAt)}</span><span class="spacer"></span>
       ${i.status === "drafted" ? `<a class="btn ghost sm" href="#/queue">Voir le brouillon</a>` : `${i.status === "proposed" ? `<button class="btn sm" data-act="idea-keep" data-id="${i.id}">Retenir</button>` : ""}<button class="btn ghost sm" data-act="idea-dismiss" data-id="${i.id}">Écarter</button><button class="btn primary sm" data-act="idea-draft" data-id="${i.id}">${I.spark} Rédiger</button>`}</div></div>`;
   return `<h2>Banque d'idées</h2><div class="card"><div class="row"><select id="idea-acc" style="width:auto" aria-label="Compte">${accs.map(a => `<option value="${esc(a.name)}" ${a === cur ? "selected" : ""}>@${esc(a.handle || a.name)}</option>`).join("")}</select>
-    <span class="small muted">${cur.ideas.perRequest || 5} idée(s) par demande${cur.ideas.autoDraft ? ", rédigées directement" : ""}</span><span class="spacer"></span><button class="btn" data-act="idea-suggest">${I.bulb} Proposer des idées</button></div>
+    <span class="small muted">${cur.ideas?.perRequest || 5} idée(s) par demande${cur.ideas?.autoDraft ? ", rédigées directement" : ""}</span><span class="spacer"></span>${cur.ideas?.enabled ? `<button class="btn" data-act="idea-suggest">${I.bulb} Proposer des idées</button>` : ""}</div>
     ${open.length ? `<div class="ideas">${open.map(card).join("")}</div>` : `<p class="hint">Aucune idée en attente.</p>`}
     ${done.length ? `<details class="tune" style="margin-top:12px"><summary>Idées déjà rédigées (${done.length})</summary><div class="ideas">${done.map(card).join("")}</div></details>` : ""}</div>`;
 }
@@ -520,11 +550,12 @@ function vCalendar(v) {
   const off = +store.get("weekOff", 0);
   const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() + off * 7);
   const days = [...Array(7)].map((_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d });
-  const evs = S.posts.filter(p => ["scheduled", "validated", "publishing", "manual", "published"].includes(p.status)).map(p => ({ p, t: new Date(p.status === "published" ? p.publishedAt : p.scheduledAt) }));
+  const lf = store.get("lineFilter", ""), byLine = p => !lf || p.line === lf;
+  const evs = S.posts.filter(p => byLine(p) && ["scheduled", "validated", "publishing", "manual", "published"].includes(p.status)).map(p => ({ p, t: new Date(p.status === "published" ? p.publishedAt : p.scheduledAt) }));
   const sameDay = (a, b) => a.toDateString() === b.toDateString();
-  const planned = S.posts.filter(p => p.status === "scheduled" || p.status === "validated" || p.status === "manual").sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const planned = S.posts.filter(p => byLine(p) && (p.status === "scheduled" || p.status === "validated" || p.status === "manual")).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
   v.innerHTML = `<div class="head"><div><h1>Calendrier</h1><p>${planned.length} post${planned.length > 1 ? "s" : ""} planifié${planned.length > 1 ? "s" : ""}.</p></div>
-    <div class="row"><button class="btn sm" data-act="week" data-d="-1">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
+    <div class="row">${lineFilter()}<button class="btn sm" data-act="week" data-d="-1">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
     <div class="week">${days.map(d => `<div class="day ${sameDay(d, new Date()) ? "today" : ""}" data-dropday="${dayKey(d)}"><div class="d">${d.toLocaleDateString("fr-FR", { weekday: "short" })}<b>${d.getDate()}</b></div>
       ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${e.p.status === "scheduled" && !e.p.campaignId ? ` draggable="true" data-drag="planned" data-id="${e.p.id}"` : ""}><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · ${isLI(e.p.account) ? "" : "@"}${esc(handleOf(e.p.account))} ${linePill(e.p)}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
     <h2>File de publication</h2>${planned.length ? `<p class="hint" style="margin-top:-6px">Glissez un post sur un jour pour le caler au premier créneau libre de ce jour, ou dans la file pour changer l'ordre.</p>
@@ -879,8 +910,9 @@ function linkedinAccountForm(a) {
       <label class="l">Voix</label><textarea name="voice" rows="6">${esc(a.voice)}</textarea>
       <label class="l">Consignes</label><textarea name="instructions">${esc(a.instructions)}</textarea>
       <label class="l">Sujets</label><input name="topics" value="${esc((a.topics || []).join(", "))}">
-      <div class="grid"><div><label class="l">Longueur visée</label><select name="length">${[["court", "Courte (300 à 600 caractères)"], ["moyen", "Moyenne (600 à 1 200)"], ["long", "Longue (1 200 à 2 000)"]].map(([k, l]) => `<option value="${k}" ${(a.length || "court") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
-      <div class="row" style="margin-top:16px"><button class="btn ghost danger sm" data-act="acc-del" data-name="${esc(a.name)}">Supprimer</button><span class="spacer"></span><button class="btn primary" data-act="acc-save" data-name="${esc(a.name)}">Enregistrer</button></div></div></div>`;
+      <div class="grid"><div><label class="l">Plafond de posts par semaine (0 = aucun)</label><input name="weeklyCap" type="number" min="0" value="${a.weeklyCap || 0}"></div>
+        <div><label class="l">Longueur visée</label><select name="length">${[["court", "Courte (300 à 600 caractères)"], ["moyen", "Moyenne (600 à 1 200)"], ["long", "Longue (1 200 à 2 000)"]].map(([k, l]) => `<option value="${k}" ${(a.length || "court") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
+      <div class="row" style="margin-top:16px"><button class="btn ghost danger sm" data-act="acc-del" data-name="${esc(a.name)}">Supprimer</button><button class="btn sm" data-act="plan-week" data-name="${esc(a.name)}" title="Propose 7 jours d'idées (aucun post, aucune date)">Plan 7 jours</button><span class="spacer"></span><button class="btn primary" data-act="acc-save" data-name="${esc(a.name)}">Enregistrer</button></div></div></div>`;
 }
 
 function readAccountForm(card, base) {
@@ -896,7 +928,7 @@ function readAccountForm(card, base) {
     }
     if (i.type === "checkbox") o[k] = i.checked;
     else if (k === "slots" || k === "topics") o[k] = i.value.split(",").map(x => x.trim()).filter(Boolean);
-    else if (k === "dailyLimit") o[k] = +i.value;
+    else if (k === "dailyLimit" || k === "weeklyCap") o[k] = +i.value;
     else if (k === "examples") o[k] = i.value.split(/^\s*---\s*$/m).map(x => x.trim()).filter(Boolean);
     else o[k] = i.value.trim();
   });
@@ -940,6 +972,44 @@ const actions = {
     if (!fb) return toast("Écrivez d'abord ce qu'il faut changer", true), $(`[data-fb="${id}"]`).focus();
     await run(b, async () => { if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id]; return api(`/api/posts/${id}/rewrite`, { feedback: fb }) }, "Réécrit", { wait: "Réécriture…" });
   },
+  async "li-hooks"(b) {
+    const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
+    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    const r = await run(b, () => api(`/api/posts/${id}/hooks`, {}), null, { wait: "Accroches…", noReload: true });
+    out.innerHTML = r.hooks.length ? `<div class="small muted">Choisissez une première ligne, ou aucune (rien ne change sans « Appliquer ») :</div>${r.hooks.map(h => `<div class="row" style="margin-top:4px"><span style="flex:1">${esc(h)}</span><button class="btn sm" data-act="li-hook-apply" data-id="${id}" data-hook="${esc(h)}">Appliquer</button></div>`).join("")}` : `<div class="small muted">Aucune accroche proposée.</div>`;
+  },
+  async "li-hook-apply"(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/hooks/apply`, { hook: b.dataset.hook }), "Accroche appliquée : contrôle anti-tics à relancer") },
+  async "li-humanize"(b) {
+    const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
+    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    const r = await run(b, () => api(`/api/posts/${id}/humanize`, {}), null, { wait: "Humanizer…", noReload: true });
+    out.innerHTML = `<div class="small muted">Version proposée (rien n'est appliqué sans clic) :</div><div class="sample" style="white-space:pre-wrap">${esc(r.text)}</div>
+      ${r.changes.length ? `<ul class="small" style="margin:6px 0 0 18px">${r.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : `<div class="small muted">Aucun changement proposé.</div>`}
+      <div class="row" style="margin-top:6px"><span class="spacer"></span><button class="btn sm primary" data-act="li-humanize-apply" data-id="${id}">Appliquer cette version</button></div>`;
+    out.dataset.text = r.text;
+  },
+  async "li-humanize-apply"(b) {
+    const text = b.closest("[data-li-out]").dataset.text;
+    await run(b, () => api(`/api/posts/${b.dataset.id}/humanize/apply`, { text }), "Version appliquée : contrôle anti-tics à relancer");
+  },
+  async "li-audit"(b) {
+    const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
+    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    const r = await run(b, () => api(`/api/posts/${id}/audit`, {}), null, { wait: "Audit…", noReload: true });
+    out.innerHTML = `<div class="small muted">Audit (informatif, ne bloque rien) · ${r.chars} caractères, accroche de ${r.hookChars}</div>${ticsHTML(r.tics)}
+      ${r.suggestions.length ? `<ul class="small" style="margin:6px 0 0 18px">${r.suggestions.map(x => `<li><b>${esc(x.area)}</b> : ${esc(x.advice)}</li>`).join("")}</ul>` : `<div class="small muted">Pas de suggestion.</div>`}`;
+  },
+  async "li-tics"(b) {
+    const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
+    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    const r = await run(b, () => api(`/api/posts/${id}/tics`, {}), null, { noReload: true });
+    out.innerHTML = ticsHTML(r.tics);
+  },
+  async "li-media"(b) {
+    const id = b.dataset.id, path = $(`[data-media="${id}"]`).value.trim(), alt = $(`[data-alt="${id}"]`).value.trim();
+    await run(b, () => api(`/api/posts/${id}/media`, { path, alt }), "Visuel enregistré");
+  },
+  async "plan-week"(b) { await run(b, () => api(`/api/accounts/${encodeURIComponent(b.dataset.name)}/plan-week`, {}), r => `${r.length} idée(s) proposée(s) : à retrouver dans la banque d'idées (aucun post créé)`, { wait: "Plan…" }) },
   async "add-linkedin"(b) {
     const line = (prompt("Ligne éditoriale : " + LINES.join(", ")) || "").trim();
     if (!line) return;
@@ -1103,6 +1173,16 @@ async function doValidate(b, extra) {
   const id = b.dataset.id;
   await run(b, async () => {
     if (edits[id] !== undefined) { await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id] }
+    const post = S.posts.find(x => x.id === id);
+    if (post && isLI(post.account)) {
+      // contrôle anti-tics lancé au moment de la validation, résultat affiché avant confirmation
+      const c = await api(`/api/posts/${id}/tics`, {});
+      if (c.needsAck) {
+        const lines = c.tics.map(t => `- ${t.rule} (${t.severity}) : « ${t.excerpt} »`).join("\n");
+        if (!confirm(`Tics d'IA repérés dans ce post :\n${lines}\n\nJe garde ces formulations et je valide ?`)) throw new Error("Validation annulée : corrigez les formulations repérées");
+        extra = { ...extra, ackTics: true };
+      }
+    }
     return api(`/api/posts/${id}/validate`, { by, ...extra });
   }, r => r.status === "validated" ? "Validé : publication dans la minute" : `Planifié ${rel(r.scheduledAt)} (${fmtDate(r.scheduledAt)})`);
 }
@@ -1117,6 +1197,13 @@ function aiTestResult(r) {
   return r.ok ? `<div class="sample"><div class="row small muted" style="margin-bottom:6px">${I.check.replace("<svg", '<svg style="width:14px;height:14px;color:var(--ok)"')} ${esc(providerName(r.provider))} répond en ${(r.ms / 1000).toFixed(1)} s</div>« ${esc(r.sample)} »</div>`
     : `<div class="tw-err" style="margin-top:12px">${esc(r.error)}</div>`;
 }
+
+document.addEventListener("change", async e => {
+  const sel = e.target.closest("[data-line]");
+  if (sel) { try { await run(null, () => api(`/api/posts/${sel.dataset.line}/line`, { line: sel.value }), "Ligne changée : validation remise à zéro") } catch {} return }
+  const lf = e.target.closest("[data-line-filter]");
+  if (lf) { store.set("lineFilter", lf.value); render() }
+});
 
 document.addEventListener("click", async e => {
   const go = e.target.closest("[data-go]");

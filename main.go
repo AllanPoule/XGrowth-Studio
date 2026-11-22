@@ -304,9 +304,63 @@ func main() {
 		if path == "none" {
 			path = ""
 		}
-		p, err := st.SetMedia(need(a, 0, "media <id> <fichier|none>"), path)
+		p, err := st.SetMedia(need(a, 0, "media <id> <fichier|none> [--alt \"texte alternatif\"]"), path)
+		check(err)
+		if a.has("alt") {
+			p, err = st.SetMediaAlt(p.ID, a.str("alt"))
+			check(err)
+		}
+		emit(p)
+
+	case "line":
+		p, err := st.SetLine(need(a, 0, "line <id> <perso|kinflux|allan-drdrt>"), a.arg(1))
 		check(err)
 		emit(p)
+
+	case "tics":
+		// contrôle anti-tics (LinkedIn) : à lancer avant de valider
+		p, err := st.CheckTics(need(a, 0, "tics <id>"))
+		check(err)
+		emit(map[string]any{"post": p.ID, "tics": orEmpty(p.Tics), "needsAck": len(highTics(p.Tics)) > 0})
+
+	case "hooks":
+		// 3 accroches alternatives ; rien ne change sans --apply N
+		id := need(a, 0, "hooks <id> [--apply 1|2|3]")
+		hooks, err := st.SuggestHooks(ctx, id)
+		check(err)
+		if n := a.integer("apply", 0); n > 0 {
+			if n > len(hooks) {
+				fail("invalid_input", fmt.Errorf("accroche %d introuvable (%d proposées)", n, len(hooks)))
+			}
+			p, err := st.ApplyHook(id, hooks[n-1])
+			check(err)
+			emit(p)
+			break
+		}
+		emit(map[string]any{"hooks": hooks})
+
+	case "humanize":
+		// version sans tics proposée ; appliquée seulement avec --apply
+		id := need(a, 0, "humanize <id> [--apply]")
+		prop, err := st.Humanize(ctx, id)
+		check(err)
+		if a.boolean("apply") {
+			p, err := st.ApplyHumanized(id, prop.Text)
+			check(err)
+			emit(p)
+			break
+		}
+		emit(prop)
+
+	case "audit":
+		r, err := st.Audit(ctx, need(a, 0, "audit <id>"))
+		check(err)
+		emit(r)
+
+	case "plan-week":
+		ideas, err := st.PlanWeek(ctx, need(a, 0, "plan-week <compte>"))
+		check(err)
+		emit(ideas)
 
 	case "rewrite":
 		fb := a.str("feedback")
@@ -336,7 +390,7 @@ func main() {
 			check(err)
 			at = &t
 		}
-		p, err := st.Validate(id, a.str("by"), at, a.boolean("now"))
+		p, err := st.ValidateWith(id, a.str("by"), at, a.boolean("now"), ValidateOptions{AckTics: a.boolean("ack-tics")})
 		check(err)
 		emit(p)
 
@@ -648,6 +702,9 @@ func applyAccountFlags(acc *Account, a args) {
 	}
 	if a.has("daily-limit") {
 		acc.DailyLimit = a.integer("daily-limit", acc.DailyLimit)
+	}
+	if a.has("weekly-cap") {
+		acc.WeeklyCap = a.integer("weekly-cap", acc.WeeklyCap)
 	}
 	if a.has("goals") {
 		acc.Goals = a.str("goals")
@@ -1045,7 +1102,7 @@ COMPTES
                     [--handle h] [--backend agentx|xapi|dryrun | linkedin|manual|dryrun (LinkedIn)] [--agentx-account n] [--token-env VAR]
                     [--tz Europe/Paris] [--slots 09:00,12:30,18:00] [--lang français] [--premium]
                     [--voice "..."] [--instructions "..."] [--topics a,b] [--triage-rules "..."]
-                    [--auto-triage] [--auto-draft] [--daily-limit 6]
+                    [--auto-triage] [--auto-draft] [--daily-limit 6] [--weekly-cap N (LinkedIn, 0 = aucun)]
                     [--goals "..."] [--length court|moyen|long] [--examples-file posts.txt]
                     [--post-types JSON|@types.json|defaut] [--ideas-prompt "..."] [--item-prompt "..."]
                     [--reply-prompt "..."] [--quote-prompt "..."] [--rewrite-prompt "..."] [--visual-guide "..."]
@@ -1108,7 +1165,8 @@ CAMPAGNES DE RÉPONSES (prospection ; rien ne part sans validation)
   comments [--campaign id] [--status draft|scheduled|published|rejected]
 
 VALIDATION ET PUBLICATION (rien ne part sans validation signée)
-  validate <id> --by <nom> [--at "2026-11-20 09:00" | --at +2h | --now]
+  validate <id> --by <nom> [--at "2026-11-20 09:00" | --at +2h | --now] [--ack-tics]
+                                         LinkedIn : lancer d'abord « tics <id> » ; --ack-tics = « je garde ces formulations »
   reject <id> [--reason "..."] | unschedule <id>
   reorder <id> <id>…                     nouvel ordre de posts planifiés (chaque compte garde ses heures)
   move <id> <AAAA-MM-JJ>                 premier créneau libre de ce jour, selon la programmation du compte
@@ -1117,6 +1175,11 @@ VALIDATION ET PUBLICATION (rien ne part sans validation signée)
   linkedin status                        LinkedIn : état de connexion (jamais le jeton) ; la connexion se fait dans le studio
   to-manual <id>                         LinkedIn : un post validé passe en « à publier à la main » (jeton expiré)
   mark-published <id> [--url <lien>]     LinkedIn : marque « publié » un post publié à la main (statut manual)
+  tics <id>                              LinkedIn : contrôle anti-tics d'IA du texte courant (obligatoire avant validate)
+  line <id> <ligne>                      LinkedIn : change l'étiquette de ligne d'un brouillon (remet la validation à zéro)
+  media <id> <fichier|none> [--alt "…"]  image du post (LinkedIn : JPG/PNG/GIF, 10 Mo, vérifiée à l'enregistrement)
+  hooks <id> [--apply N] | humanize <id> [--apply] | audit <id> | plan-week <compte>
+                                         LinkedIn, méthode : aides sur demande, rien n'est modifié sans --apply
   metrics                                rafraîchit les statistiques des posts publiés
   run [--every 60]                       planificateur : publication, veille, tri, statistiques
   serve [--addr 127.0.0.1:8787] [--host studio.exemple.fr] [--no-auth] [--no-scheduler]

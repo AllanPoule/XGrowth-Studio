@@ -490,25 +490,36 @@ func (b *linkedinBackend) Post(ctx context.Context, r PostRequest) (string, erro
 	return resp.Header.Get("x-restli-id"), nil
 }
 
-// uploadImage : initializeUpload, envoi binaire, puis l'URN de l'image.
-func (b *linkedinBackend) uploadImage(ctx context.Context, path string) (string, error) {
+// readLinkedInImage lit un visuel et vérifie ce que LinkedIn accepte : JPG,
+// PNG ou GIF, 10 Mo au plus (garde-fou du studio) et moins de 36 152 320 pixels.
+// Utilisé à l'enregistrement du visuel et juste avant l'envoi.
+func readLinkedInImage(path string) ([]byte, error) {
 	st, err := os.Stat(path)
 	if err != nil || st.IsDir() {
-		return "", errors.New("visuel illisible : le fichier est introuvable sur le serveur")
+		return nil, errors.New("visuel illisible : le fichier est introuvable sur le serveur")
 	}
 	if st.Size() > linkedinMaxImageBytes {
-		return "", errors.New("visuel trop lourd (10 Mo maximum)")
+		return nil, errors.New("visuel trop lourd (10 Mo maximum)")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", errors.New("visuel illisible")
+		return nil, errors.New("visuel illisible")
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || (format != "jpeg" && format != "png" && format != "gif") {
-		return "", errors.New("visuel refusé : JPG, PNG ou GIF attendu")
+		return nil, errors.New("visuel refusé : JPG, PNG ou GIF attendu")
 	}
 	if cfg.Width*cfg.Height >= linkedinMaxPixels {
-		return "", errors.New("visuel refusé : image trop grande pour LinkedIn")
+		return nil, errors.New("visuel refusé : image trop grande pour LinkedIn")
+	}
+	return data, nil
+}
+
+// uploadImage : initializeUpload, envoi binaire, puis l'URN de l'image.
+func (b *linkedinBackend) uploadImage(ctx context.Context, path string) (string, error) {
+	data, err := readLinkedInImage(path)
+	if err != nil {
+		return "", err
 	}
 	init, _ := json.Marshal(map[string]any{"initializeUploadRequest": map[string]any{"owner": b.author}})
 	resp, raw, err := b.request(ctx, "POST", b.cfg.APIBase+"/rest/images?action=initializeUpload", bytes.NewReader(init), "application/json", true)

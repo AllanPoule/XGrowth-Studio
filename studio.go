@@ -332,6 +332,11 @@ func (s *Studio) AddDraft(account, text, replyTo, quoteOf, media string) (*Post,
 	}
 	p := s.newPost(a, kind, text, "")
 	p.ReplyTo, p.QuoteOf, p.MediaPath = parseTweetID(replyTo), parseTweetID(quoteOf), media
+	if media != "" && isLinkedIn(a) {
+		if _, err := readLinkedInImage(media); err != nil {
+			return nil, err
+		}
+	}
 	if p.Text == "" && media == "" {
 		return nil, errors.New("texte vide")
 	}
@@ -433,6 +438,14 @@ func editable(p *Post) error {
 func resetValidation(p *Post) {
 	p.Status = StatusDraft
 	p.ScheduledAt, p.ValidatedAt, p.ValidatedBy, p.Error = nil, nil, "", ""
+	p.TicsAcknowledged, p.Warnings = false, nil
+}
+
+// resetTicCheck : le contrôle anti-tics (LinkedIn) porte sur le texte courant ;
+// toute modification du texte l'invalide. (Validate compare aussi l'empreinte,
+// au cas où un texte changerait sans passer par ici.)
+func resetTicCheck(p *Post) {
+	p.TicCheckedHash, p.TicCheckedAt, p.Tics = "", nil, nil
 }
 
 func (s *Studio) EditPost(id, text string) (*Post, error) {
@@ -449,6 +462,7 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 		p.Text = strings.TrimSpace(text)
 		recordCorrection(d, p, s.now().UTC())
 		resetValidation(p)
+		resetTicCheck(p)
 		p.UpdatedAt = s.now().UTC()
 		out = p
 		return nil
@@ -456,6 +470,9 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 	return out, err
 }
 
+// SetMedia associe (ou retire, avec un chemin vide) l'image d'un post. Sur
+// LinkedIn le fichier est vérifié à l'enregistrement : JPG, PNG ou GIF, 10 Mo
+// au plus, moins de 36 152 320 pixels. Le texte alternatif est gardé.
 func (s *Studio) SetMedia(id, path string) (*Post, error) {
 	var out *Post
 	err := s.store.Update(func(d *Data) error {
@@ -466,7 +483,46 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 		if err := editable(p); err != nil {
 			return err
 		}
+		if path != "" && isLinkedIn(d.Account(p.Account)) {
+			if _, err := readLinkedInImage(path); err != nil {
+				return err
+			}
+		}
 		p.MediaPath = path
+		if path == "" {
+			p.MediaAlt = ""
+		}
+		resetValidation(p)
+		out = p
+		return nil
+	})
+	return out, err
+}
+
+const maxMediaAlt = 4086 // limite LinkedIn du texte alternatif ; 120 caractères recommandés
+
+// SetMediaAlt règle le texte alternatif du visuel (LinkedIn).
+func (s *Studio) SetMediaAlt(id, alt string) (*Post, error) {
+	alt = strings.Join(strings.Fields(alt), " ")
+	if utf8.RuneCountInString(alt) > maxMediaAlt {
+		return nil, fmt.Errorf("texte alternatif trop long (%d caractères au plus)", maxMediaAlt)
+	}
+	var out *Post
+	err := s.store.Update(func(d *Data) error {
+		p := d.Post(id)
+		if p == nil {
+			return fmt.Errorf("post %q inconnu", id)
+		}
+		if !isLinkedIn(d.Account(p.Account)) {
+			return errNotLinkedIn
+		}
+		if err := editable(p); err != nil {
+			return err
+		}
+		if alt != "" && p.MediaPath == "" {
+			return errors.New("ce post n'a pas d'image : ajoutez le visuel avant son texte alternatif")
+		}
+		p.MediaAlt = alt
 		resetValidation(p)
 		out = p
 		return nil
@@ -502,6 +558,7 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 		p.Text, p.Rationale = strings.TrimSpace(o.Text), o.Rationale
 		p.AIText = p.Text
 		resetValidation(p)
+		resetTicCheck(p)
 		p.UpdatedAt = s.now().UTC()
 		d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: feedback, Source: FeedbackRewrite, PostID: p.ID, CreatedAt: s.now().UTC()})
 		out = p
@@ -575,6 +632,7 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 			taken = append(taken, *p.PublishedAt)
 		}
 	}
+	capTimes := weekPostTimes(d, a, skipID)
 	perDay := map[string]int{}
 	for _, t := range taken {
 		perDay[t.In(loc).Format("2006-01-02")]++
@@ -585,6 +643,9 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 		key := dd.Format("2006-01-02")
 		if a.DailyLimit > 0 && perDay[key] >= a.DailyLimit {
 			continue
+		}
+		if weekFull(a, capTimes, dd) {
+			continue // plafond hebdomadaire atteint : semaine suivante
 		}
 		for _, sl := range a.Slots {
 			var h, m int
@@ -615,6 +676,20 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 // Validate est l'acte humain qui autorise la publication. `by` est obligatoire.
 // at : date imposée ; now : publier au prochain passage ; sinon prochain créneau.
 func (s *Studio) Validate(id, by string, at *time.Time, now bool) (*Post, error) {
+	return s.ValidateWith(id, by, at, now, ValidateOptions{})
+}
+
+// ValidateOptions : choix explicites d'Allan au moment de la validation.
+type ValidateOptions struct {
+	// AckTics : « je garde ces formulations » (tics de sévérité haute, LinkedIn).
+	AckTics bool
+}
+
+// ValidateWith : Validate avec les choix explicites d'Allan. Pour un post
+// LinkedIn, trois conditions s'ajoutent : une ligne éditoriale valide, un
+// contrôle anti-tics lancé sur le texte courant (et aucun tic haut sans
+// accusé), et un plafond hebdomadaire non atteint à la date retenue.
+func (s *Studio) ValidateWith(id, by string, at *time.Time, now bool, opts ValidateOptions) (*Post, error) {
 	by = strings.TrimSpace(by)
 	if by == "" {
 		return nil, errors.New("la validation doit être signée (--by <nom>)")
@@ -641,9 +716,26 @@ func (s *Studio) Validate(id, by string, at *time.Time, now bool) (*Post, error)
 		if isLinkedIn(a) && !validLinkedInLine(p.Line) {
 			return errors.New("validation refusée : ce post LinkedIn n'a pas de ligne éditoriale valide")
 		}
+		p.Warnings = nil
+		if isLinkedIn(a) {
+			if p.TicCheckedHash != textHash(p.Text) {
+				return errors.New("validation refusée : le contrôle anti-tics n'a pas été lancé sur le texte actuel (lancez-le avant de valider)")
+			}
+			hi := highTics(TicCheck(p.Text))
+			if len(hi) > 0 && !opts.AckTics {
+				return fmt.Errorf("validation refusée : tics d'IA à corriger, ou à accepter explicitement (« je garde ces formulations ») : %s", ticSummary(hi))
+			}
+			p.TicsAcknowledged = len(hi) > 0
+			if p.VisualBrief != "" && p.MediaPath == "" {
+				p.Warnings = append(p.Warnings, "un visuel est proposé mais aucune image n'est associée : le post partira sans image")
+			}
+		}
 		t := s.now().UTC()
 		switch {
 		case now:
+			if weekFull(a, weekPostTimes(d, a, p.ID), t) {
+				return fmt.Errorf("validation refusée : %w", errWeekFull(a, t))
+			}
 			p.Status = StatusValidated
 			p.ScheduledAt = &t
 		case at != nil:
@@ -651,6 +743,9 @@ func (s *Studio) Validate(id, by string, at *time.Time, now bool) (*Post, error)
 				return errors.New("la date de publication est passée")
 			}
 			u := at.UTC()
+			if weekFull(a, weekPostTimes(d, a, p.ID), u) {
+				return fmt.Errorf("validation refusée : %w", errWeekFull(a, u))
+			}
 			p.Status, p.ScheduledAt = StatusScheduled, &u
 		case p.CampaignID != "":
 			c := d.Campaign(p.CampaignID)
@@ -755,6 +850,18 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				skip = p.Error
 				return nil
 			}
+			if p.CampaignID == "" && a.WeeklyCap > 0 && countsForCap(p) && weeklyOccupied(d, a, s.now(), p.ID) >= a.WeeklyCap {
+				// plafond de la semaine atteint : jamais dépassé, le post passe à une semaine avec de la place
+				next, err := NextSlot(d, a, s.now().UTC(), p.ID)
+				if err != nil {
+					p.Status, p.Error = StatusFailed, "plafond hebdomadaire atteint et aucun créneau libre"
+				} else {
+					p.ScheduledAt = &next
+					p.Error = "plafond hebdomadaire atteint : reporté"
+				}
+				skip = p.Error
+				return nil
+			}
 			prev = p.Status
 			p.Status = StatusPublishing
 			post, acct = *p, *a
@@ -781,7 +888,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			_, err = be.Me(ctx)
 		}
 		if err == nil {
-			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath, ValidatedBy: post.ValidatedBy})
+			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath, MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
 		}
 		r := PublishResult{PostID: id, Account: acct.Name}
 		_ = s.store.Update(func(d *Data) error {

@@ -57,7 +57,7 @@ type Account struct {
 	DisplayName   string        `json:"displayName,omitempty"`
 	Platform      string        `json:"platform,omitempty"`      // "" ou x | linkedin
 	Line          string        `json:"line,omitempty"`          // LinkedIn : ligne éditoriale (perso | kinflux | allan-drdrt)
-	WeeklyCap     int           `json:"weeklyCap,omitempty"`     // LinkedIn : plafond de posts par semaine (réglé au lot 3 ; 0 = aucun)
+	WeeklyCap     int           `json:"weeklyCap,omitempty"`     // LinkedIn : plafond de posts par semaine, réglé par Allan (0 = aucun, pas de valeur par défaut)
 	AuthorURN     string        `json:"authorURN,omitempty"`     // LinkedIn : urn:li:person:… (renseigné au lot 2)
 	Backend       string        `json:"backend"`                 // X : agentx | xapi | dryrun ; LinkedIn : manual | dryrun (linkedin : lot 2)
 	AgentxAccount string        `json:"agentxAccount,omitempty"` // nom passé à `agentx -a`
@@ -120,6 +120,7 @@ type Post struct {
 	QuoteOf     string     `json:"quoteOf,omitempty"`
 	TargetText  string     `json:"targetText,omitempty"` // texte du post auquel on répond / qu'on cite
 	MediaPath   string     `json:"mediaPath,omitempty"`
+	MediaAlt    string     `json:"mediaAlt,omitempty"` // LinkedIn : texte alternatif du visuel (4 086 caractères au plus)
 	Rationale   string     `json:"rationale,omitempty"`
 	Status      string     `json:"status"`
 	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
@@ -138,8 +139,18 @@ type Post struct {
 	IdeaID      string     `json:"ideaId,omitempty"`      // idée de la banque dont le post est tiré
 	History     []Revision `json:"history,omitempty"`
 	Metrics     *Metrics   `json:"metrics,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
+
+	// LinkedIn : contrôle anti-tics d'IA, obligatoire avant la validation. Il
+	// porte sur le texte courant (empreinte) et tombe à la moindre modification.
+	TicCheckedHash   string     `json:"ticCheckedHash,omitempty"`
+	TicCheckedAt     *time.Time `json:"ticCheckedAt,omitempty"`
+	Tics             []Tic      `json:"tics,omitempty"`             // résultat du dernier contrôle
+	TicsAcknowledged bool       `json:"ticsAcknowledged,omitempty"` // « je garde ces formulations » (tics hauts)
+	// Avertissements non bloquants posés à la validation (ex. visuel manquant).
+	Warnings []string `json:"warnings,omitempty"`
+
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type Item struct {
