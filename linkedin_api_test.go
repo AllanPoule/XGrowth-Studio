@@ -949,3 +949,63 @@ func TestLinkedInAuthorURNKeptOnSave(t *testing.T) {
 		t.Fatalf("AuthorURN d'un nouveau compte = %q", got)
 	}
 }
+
+// Le state est lié à la session qui l'a demandé (protection CSRF du flux OAuth).
+func TestLinkedInStateBoundToSession(t *testing.T) {
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	o := &liOAuth{}
+	st := o.issue("pro", sha("session-A"), now)
+	if acc, ok := o.consume(st, sha("session-B"), now); ok || acc != "" {
+		t.Fatalf("une autre session ne doit pas consommer le state : %q %v", acc, ok)
+	}
+	// le state est brûlé : même la bonne session ne peut plus l'utiliser
+	if _, ok := o.consume(st, sha("session-A"), now); ok {
+		t.Fatal("le state refusé ne doit plus être réutilisable")
+	}
+	st = o.issue("pro", sha("session-A"), now)
+	if acc, ok := o.consume(st, sha("session-A"), now); !ok || acc != "pro" {
+		t.Fatalf("la session d'origine doit passer : %q %v", acc, ok)
+	}
+}
+
+func TestLinkedInUploadURLOK(t *testing.T) {
+	b := &linkedinBackend{}
+	cases := map[string]bool{
+		"https://www.linkedin.com/x":       true,
+		"https://media.licdn.com/x":        true,
+		"https://linkedin.com/x":           true,
+		"http://api.linkedin.com/x":        false,
+		"https://linkedin.com.evil.com/x":  false,
+		"https://evillinkedin.com/x":       false,
+		"https://example.com/x":            false,
+		"https://evil.com/?h=linkedin.com": false,
+		"":                                 false,
+	}
+	for raw, want := range cases {
+		if got := b.uploadURLOK(raw); got != want {
+			t.Errorf("uploadURLOK(%q) = %v, attendu %v", raw, got, want)
+		}
+	}
+}
+
+// Un uploadUrl hors LinkedIn : le post échoue, aucun PUT, le jeton ne part pas.
+func TestLinkedInUploadHostRefused(t *testing.T) {
+	e, f := liAPI(t, true)
+	cfg := f.cfg()
+	cfg.insecure = false
+	e.st.liCfg = func() liConfig { return cfg }
+	p := e.liDraft(t, "Visuel vers un hôte tiers")
+	if _, err := e.st.SetMedia(p.ID, writePNG(t)); err != nil {
+		t.Fatal(err)
+	}
+	at := e.now.Add(-time.Minute)
+	if _, err := e.st.Validate(p.ID, "allan", &at, false); err != nil {
+		t.Fatal(err)
+	}
+	if res := e.st.PublishDue(context.Background()); len(res) != 1 || res[0].Status == StatusPublished {
+		t.Fatalf("la publication doit échouer : %+v", res)
+	}
+	if f.count("/upload/") != 0 || f.count("/rest/posts") != 0 {
+		t.Fatalf("aucun PUT ni POST attendu (upload=%d posts=%d)", f.count("/upload/"), f.count("/rest/posts"))
+	}
+}
