@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -549,7 +550,7 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
 			taken = append(taken, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			taken = append(taken, *p.PublishedAt)
@@ -798,6 +799,13 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 // Seul un post déjà validé (signé) peut être marqué publié ; rien n'est envoyé.
 func (s *Studio) MarkPublished(id, url string) (*Post, error) {
 	var out *Post
+	u := strings.TrimSpace(url)
+	if u != "" {
+		pu, perr := neturl.Parse(u)
+		if perr != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Hostname() == "" {
+			return nil, errors.New("url invalide : une adresse http(s) complète est attendue")
+		}
+	}
 	err := s.store.Update(func(d *Data) error {
 		p := d.Post(id)
 		if p == nil {
@@ -811,7 +819,7 @@ func (s *Studio) MarkPublished(id, url string) (*Post, error) {
 		}
 		t := s.now().UTC()
 		p.Status, p.PublishedAt, p.Error, p.UpdatedAt = StatusPublished, &t, "", t
-		if u := strings.TrimSpace(url); u != "" {
+		if u != "" {
 			p.PostURN = u
 		}
 		d.AddLog("info", "post %s publié à la main sur LinkedIn (%s)", id, p.Line)

@@ -266,7 +266,7 @@ function tweetCard(p, mode) {
         ${p.validatedBy ? `<span class="pill">${I.shield.replace("<svg", '<svg style="width:12px;height:12px"')} ${esc(p.validatedBy)}</span>` : ""}
         ${li && p.status === "published" ? `<span class="small muted">Statistiques indisponibles</span>` : ""}
         ${p.metrics && !li ? `<span class="small muted">👁 ${nf(p.metrics.views)} · ♥ ${nf(p.metrics.likes)} · ↻ ${nf(p.metrics.retweets)} · ${p.metrics.engagementRatePct.toFixed(1)} %</span>` : ""}
-        ${url ? `<a class="small" href="${url}" target="_blank" rel="noopener">${li ? "Voir sur LinkedIn" : "Voir sur X"} ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
+        ${url ? `<a class="small" href="${esc(url)}" target="_blank" rel="noopener">${li ? "Voir sur LinkedIn" : "Voir sur X"} ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
@@ -869,8 +869,8 @@ function readAccountForm(card, base) {
     else if (k === "examples") o[k] = i.value.split(/^\s*---\s*$/m).map(x => x.trim()).filter(Boolean);
     else o[k] = i.value.trim();
   });
-  o.postTypes = readTypes(card);
-  o.prompts = readPrompts(card);
+  if ($("[data-types]", card)) o.postTypes = readTypes(card);
+  if ($("[data-prompt]", card)) o.prompts = readPrompts(card);
   return o;
 }
 

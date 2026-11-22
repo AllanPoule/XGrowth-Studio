@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -391,6 +394,7 @@ func TestLinkedInTickMakesNoXCalls(t *testing.T) {
 	if _, err := e.st.AddWatch("pro", "user", "@source", 1); err != nil {
 		t.Fatal(err)
 	}
+	_ = e.st.store.Update(func(d *Data) error { d.Account("pro").Watch[0].Primary = true; return nil })
 	camp := testCampaign()
 	camp.Account = "pro"
 	if _, err := e.st.SaveCampaign(camp); err != nil {
@@ -400,8 +404,12 @@ func TestLinkedInTickMakesNoXCalls(t *testing.T) {
 	_ = e.st.store.Update(func(d *Data) error {
 		d.Items = append(d.Items, &Item{ID: "i1", Account: "pro", Source: "watch:user:source", TweetID: "1", Text: "agents IA", Status: ItemPending, FetchedAt: e.now})
 		// un post publié mesurable côté X : LinkedIn n'est jamais relevé
-		pa := e.now.Add(-48 * time.Hour)
-		d.Posts = append(d.Posts, &Post{ID: "pp", Account: "pro", Kind: "post", Text: "ancien", Status: StatusPublished, PublishedAt: &pa, TweetID: "999", CreatedAt: old, UpdatedAt: old})
+		// éligibles à l'analyse (vues, âge du relevé, pas « dry- ») et assez nombreux pour la déclencher
+		pa := e.now.Add(-10 * 24 * time.Hour)
+		for i := 0; i < perfAutoMinNewPosts+3; i++ {
+			d.Posts = append(d.Posts, &Post{ID: fmt.Sprintf("pp%d", i), Account: "pro", Kind: "post", Text: "ancien", Status: StatusPublished, PublishedAt: &pa, TweetID: fmt.Sprintf("li-%d", i),
+				Metrics: &Metrics{Views: perfMinViews + 100, Likes: 5 + i, UpdatedAt: pa.Add(perfMinAge + time.Hour)}, CreatedAt: old, UpdatedAt: old})
+		}
 		d.Settings.AutoPerfAnalysis = true
 		return nil
 	})
@@ -420,6 +428,48 @@ func TestLinkedInTickMakesNoXCalls(t *testing.T) {
 	if xCalls != 0 || e.ai.count() != 0 {
 		t.Fatalf("appels backend=%d, IA=%d : attendu 0", xCalls, e.ai.count())
 	}
+	// le même Tick, avec un compte X en plus : ses appels ont toujours lieu,
+	// ceux du compte LinkedIn jamais
+	if err := e.st.SaveAccount(&Account{Name: "xa", Handle: "@xa", Backend: "dryrun", Timezone: "UTC", AutoTriage: true, Slots: []string{"09:00"},
+		Sources: SourceSettings{News: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AddWatch("xa", "user", "@src", 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Account("xa").Watch[0].Primary = true
+		d.Items = append(d.Items, &Item{ID: "ix", Account: "xa", Source: "watch:user:src", TweetID: "7", Text: "annonce", Status: ItemPending, FetchedAt: e.now})
+		return nil
+	})
+	e.now = e.now.Add(time.Hour)
+	e.st.Tick(ctx)
+	if xCalls == 0 {
+		t.Error("le compte X doit continuer à appeler X")
+	}
+	if got := e.st.store.Snapshot().Item("ix"); got != nil && got.Status == ItemPending {
+		t.Error("l'actualité du compte X devrait avoir été traitée")
+	}
+	if n := e.ai.count(); n == 0 {
+		t.Error("le compte X doit continuer à utiliser l'IA")
+	}
+	for _, p := range e.st.store.Snapshot().Posts {
+		if p.Account == "pro" && strings.HasPrefix(p.ID, "p") && p.Status == StatusDraft {
+			t.Errorf("brouillon LinkedIn issu de l'automatique : %+v", p)
+		}
+	}
+	// analyse manuelle (hors Tick, sans le filtre « due ») : LinkedIn reste exclu
+	if _, err := e.st.analyzePerformance(ctx, "pro", false); err != nil && !errors.Is(err, errPerfUnknownAccount) {
+		t.Logf("analyse manuelle : %v", err)
+	}
+	if r, _ := e.st.analyzePerformance(ctx, "", false); r != nil {
+		for _, ar := range r.Accounts {
+			if ar.Account == "pro" {
+				t.Errorf("un compte LinkedIn ne doit pas être analysé : %+v", ar)
+			}
+		}
+	}
+	xCalls, aiBefore := 0, e.ai.count()
 	if _, err := e.st.ImportBookmarks(ctx, "pro", 5); err == nil {
 		t.Error("les signets n'existent pas pour LinkedIn")
 	}
@@ -429,8 +479,8 @@ func TestLinkedInTickMakesNoXCalls(t *testing.T) {
 	if r := e.st.RunCampaign(ctx, camp.ID, true); r.Skipped == "" {
 		t.Errorf("une campagne LinkedIn doit être ignorée : %+v", r)
 	}
-	if xCalls != 0 || e.ai.count() != 0 {
-		t.Fatalf("appels backend=%d, IA=%d : attendu 0", xCalls, e.ai.count())
+	if xCalls != 0 || e.ai.count() != aiBefore {
+		t.Fatalf("appels backend=%d, IA=%d : attendu 0", xCalls, e.ai.count()-aiBefore)
 	}
 }
 
@@ -538,6 +588,15 @@ func TestMarkPublishedHandler(t *testing.T) {
 		t.Fatalf("%d %v", code, m)
 	}
 	st.PublishDue(context.Background())
+	for _, bad := range []string{"javascript:alert(1)", "linkedin.com/posts/x", "https://", "ftp://h/x", `\"><script>`} {
+		body, _ := json.Marshal(map[string]string{"url": bad})
+		if code, _ := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/mark-published", string(body)); code == 200 {
+			t.Fatalf("url invalide acceptée : %q", bad)
+		}
+	}
+	if store.Snapshot().Post(p.ID).Status != StatusManual {
+		t.Fatal("une url refusée ne doit rien changer")
+	}
 	code, m := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/mark-published", `{"url":"https://www.linkedin.com/posts/x"}`)
 	if code != 200 {
 		t.Fatalf("%d %v", code, m)
