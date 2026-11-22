@@ -805,6 +805,9 @@ func (s *Studio) MarkPublished(id, url string) (*Post, error) {
 		if perr != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Hostname() == "" {
 			return nil, errors.New("url invalide : une adresse http(s) complète est attendue")
 		}
+		if strings.ContainsAny(u, " \t\r\n\"'<>`") {
+			return nil, errors.New("url invalide : caractères interdits")
+		}
 	}
 	err := s.store.Update(func(d *Data) error {
 		p := d.Post(id)

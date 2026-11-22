@@ -588,7 +588,7 @@ func TestMarkPublishedHandler(t *testing.T) {
 		t.Fatalf("%d %v", code, m)
 	}
 	st.PublishDue(context.Background())
-	for _, bad := range []string{"javascript:alert(1)", "linkedin.com/posts/x", "https://", "ftp://h/x", `\"><script>`} {
+	for _, bad := range []string{"javascript:alert(1)", "linkedin.com/posts/x", "https://", "ftp://h/x", `\"><script>`, "https://linkedin.com/x\" onmouseover=\"alert(1)", "https://linkedin.com/a b", "https://linkedin.com/x'y"} {
 		body, _ := json.Marshal(map[string]string{"url": bad})
 		if code, _ := call(t, c, "POST", srv.URL+"/api/posts/"+p.ID+"/mark-published", string(body)); code == 200 {
 			t.Fatalf("url invalide acceptée : %q", bad)
@@ -624,6 +624,28 @@ func TestLinkedInStatusWritersAreConfined(t *testing.T) {
 					t.Errorf("%s:%d écrit un statut publiable hors du circuit validé : %s", f, i+1, strings.TrimSpace(line))
 				}
 			}
+		}
+	}
+}
+
+// Un post « à publier à la main » garde son créneau : le suivant est proposé.
+func TestManualPostOccupiesSlot(t *testing.T) {
+	after := time.Date(2026, 12, 1, 6, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"slots", "window"} {
+		a := &Account{Name: "pro", Timezone: "UTC", Slots: []string{"09:00", "13:00"}, Timing: Timing{Mode: mode, Start: "09:00", End: "22:00", GapMin: 30, GapMax: 60}}
+		d := &Data{}
+		d.Settings.MinGapMinutes = 60
+		first, err := NextSlot(d, a, after, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Posts = append(d.Posts, &Post{ID: "m1", Account: "pro", Status: StatusManual, ScheduledAt: &first})
+		next, err := NextSlot(d, a, after, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.Equal(first) {
+			t.Fatalf("%s : le créneau %v du post manuel est reproposé", mode, first)
 		}
 	}
 }
