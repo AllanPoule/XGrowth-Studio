@@ -29,7 +29,8 @@ const (
 	StatusPublished  = "published"
 	StatusFailed     = "failed"
 	StatusRejected   = "rejected"
-	StatusManual     = "manual" // LinkedIn, backend manuel : validé, à publier à la main
+	StatusManual     = "manual"  // LinkedIn, backend manuel : validé, à publier à la main
+	StatusHandled    = "handled" // LinkedIn, réponse ou commentaire : traité à la main par Allan (jamais envoyé par l'outil)
 )
 
 // Statuts d'un contenu de veille.
@@ -114,11 +115,13 @@ type Revision struct {
 type Post struct {
 	ID          string     `json:"id"`
 	Account     string     `json:"account"`
-	Kind        string     `json:"kind"` // post | reply | quote
+	Kind        string     `json:"kind"` // post | reply | quote | comment (LinkedIn : brouillons à poster à la main)
 	Text        string     `json:"text"`
 	ReplyTo     string     `json:"replyTo,omitempty"`
 	QuoteOf     string     `json:"quoteOf,omitempty"`
 	TargetText  string     `json:"targetText,omitempty"` // texte du post auquel on répond / qu'on cite
+	TargetURL   string     `json:"targetUrl,omitempty"`  // LinkedIn (réponse/commentaire) : lien collé par Allan, stocké tel quel, jamais ouvert ni appelé
+	HandledAt   *time.Time `json:"handledAt,omitempty"`  // LinkedIn (réponse/commentaire) : date du « traité à la main »
 	MediaPath   string     `json:"mediaPath,omitempty"`
 	MediaAlt    string     `json:"mediaAlt,omitempty"` // LinkedIn : texte alternatif du visuel (4 086 caractères au plus)
 	Rationale   string     `json:"rationale,omitempty"`

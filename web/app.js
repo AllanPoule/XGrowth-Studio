@@ -152,9 +152,11 @@ function ring(n, max) {
   return `<svg class="ring ${cls}" viewBox="0 0 26 26"><circle class="bgc" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5"/><circle class="fg" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct)}" transform="rotate(-90 13 13)" stroke-linecap="round"/></svg>`;
 }
 
-const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"], manual: ["À publier à la main", "warn"] };
+const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"], manual: ["À publier à la main", "warn"], handled: ["Traité à la main", "ok"] };
 const statusPill = s => { const [l, c] = STATUS[s] || [s, ""]; return `<span class="pill ${c}">${l}</span>` };
-const KIND = { reply: "Réponse", quote: "Citation", post: "" };
+const KIND = { reply: "Réponse", quote: "Citation", comment: "Commentaire", post: "" };
+// LinkedIn : réponses et commentaires = brouillons à poster à la main (jamais validés ni envoyés par l'outil)
+const isHand = p => p.kind === "comment" || (p.kind === "reply" && isLI(p.account));
 
 // ------------------------------------------------------------------ démarrage
 async function boot() {
@@ -237,14 +239,18 @@ const ROUTES = [
 ];
 // l'onglet « Commentaires » (campagnes de réponses) se place après « Créer »
 ROUTES.splice(3, 0, ["comments", "Commentaires", I.reply]);
+// l'onglet « Réponses » (LinkedIn, brouillons à poster à la main) n'apparaît que s'il y a un compte LinkedIn
+ROUTES.splice(4, 0, ["replies", "Réponses", I.reply]);
+const routesShown = () => ROUTES.filter(x => x[0] !== "replies" || (S.accounts || []).some(a => a.platform === "linkedin"));
 const route = () => (location.hash.replace(/^#\/?/, "") || "home").split("/")[0];
 window.addEventListener("hashchange", () => S && render());
 
 function counts() {
-  const q = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId).length;
+  const q = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p)).length;
+  const rp = S.posts.filter(p => p.status === "draft" && isHand(p)).length;
   const w = (S.items || []).filter(i => i.status === "pending").length;
   const cm = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && p.campaignId).length;
-  return { queue: q, watch: w, comments: cm };
+  return { queue: q, watch: w, comments: cm, replies: rp };
 }
 
 function render() {
@@ -257,7 +263,7 @@ function render() {
   $("#root").innerHTML = `<div class="app">
     <aside class="side">
       <div class="brand"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span></div>
-      <nav class="nav">${ROUTES.map(x => navItem(x)).join("")}</nav>
+      <nav class="nav">${routesShown().map(x => navItem(x)).join("")}</nav>
       <div class="grow"></div>
       <button class="aipill" data-go="settings">
         <span class="dot ${pinfo && !pinfo.available ? "off" : ""}"></span>
@@ -269,9 +275,9 @@ function render() {
       <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
       <main class="main"><div class="wrap" id="view"></div></main>
     </div>
-    <nav class="mnav">${ROUTES.filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
+    <nav class="mnav">${routesShown().filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
   </div>`;
-  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments };
+  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments, replies: vReplies };
   (views[r] || vHome)($("#view"));
   $("#view").insertAdjacentHTML("afterbegin", liBanner());
 }
@@ -280,9 +286,9 @@ function render() {
 function tweetCard(p, mode) {
   const a = acct(p.account), h = a?.handle || p.account, li = a?.platform === "linkedin";
   const text = edits[p.id] ?? p.text, n = len(text), max = maxLen(p.account);
-  const editable = mode === "edit";
+  const editable = mode === "edit" || mode === "hand";
   const when = p.status === "published" ? `· ${rel(p.publishedAt)}` : p.scheduledAt ? `· ${I.clock.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${fmtDate(p.scheduledAt)}` : `· créé ${rel(p.createdAt)}`;
-  const target = p.targetText ? `<div class="tw-target"><div class="who">${p.kind === "reply" ? "En réponse à" : "Cite"}</div>${esc(p.targetText)}</div>` : "";
+  const target = p.targetText ? `<div class="tw-target"><div class="who">${p.kind === "comment" ? "Post commenté" : p.kind === "reply" ? (isHand(p) ? "Commentaire reçu" : "En réponse à") : "Cite"}</div>${esc(p.targetText)}</div>` : "";
   const url = tweetURL(p);
   return `<article class="tweet" data-id="${p.id}">
     <div class="av">${esc(h[0] || "x")}</div>
@@ -300,9 +306,9 @@ function tweetCard(p, mode) {
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${(p.warnings || []).map(w => `<div class="tw-why">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')}<span><b>Avertissement :</b> ${esc(w)}</span></div>`).join("")}
-      ${li && editable ? liTools(p) : ""}
+      ${li && mode === "edit" ? liTools(p) : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
-      ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}${li && (p.status === "scheduled" || p.status === "validated") ? `<button class="btn sm" data-act="to-manual" data-id="${p.id}" title="Ne pas publier par l'API : vous publiez vous-même sur LinkedIn">Publier à la main</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
+      ${mode === "hand" ? handActions(p) : mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}${li && (p.status === "scheduled" || p.status === "validated") ? `<button class="btn sm" data-act="to-manual" data-id="${p.id}" title="Ne pas publier par l'API : vous publiez vous-même sur LinkedIn">Publier à la main</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
 }
 
@@ -324,6 +330,19 @@ function liTools(p) {
     ${p.visualBrief && !p.mediaPath ? `<div class="small muted" style="margin-top:6px">Un visuel est proposé mais aucune image n'est associée : le post partira sans image si vous validez.</div>` : ""}
     ${p.ticCheckedAt ? `<div style="margin-top:6px"><span class="small muted">Dernier contrôle anti-tics :</span>${ticsHTML(p.tics)}</div>` : ""}
     <div data-li-out="${p.id}" style="margin-top:8px"></div></div>`;
+}
+
+// Réponse ou commentaire LinkedIn : on copie le texte et on le poste à la main.
+// Pas de « Valider » : l'outil n'envoie jamais un commentaire.
+function handActions(p) {
+  return `<div class="tw-actions">
+    <button class="btn primary sm" data-act="hand-copy" data-id="${p.id}">Copier</button>
+    <button class="btn sm" data-act="hand-done" data-id="${p.id}">${I.check} Marquer comme traité</button>
+    <span class="spacer"></span>
+    <button class="btn sm ghost" data-act="save" data-id="${p.id}">Enregistrer</button>
+    <button class="btn sm ghost danger" data-act="reject" data-id="${p.id}">Rejeter</button>
+  </div>
+  <div class="feedback"><input data-fb="${p.id}" placeholder="Demandez une retouche : plus court, plus direct…"><button class="btn sm" data-act="rewrite" data-id="${p.id}">${I.spark} Réécrire</button></div>`;
 }
 
 function queueActions(p) {
@@ -361,7 +380,7 @@ function vHome(v) {
   const hour = new Date().getHours();
   const hello = hour < 6 ? "Bonne nuit" : hour < 18 ? "Bonjour" : "Bonsoir";
   const next = planned[0];
-  const drafts = S.posts.filter(p => p.status === "draft").slice(-3).reverse();
+  const drafts = S.posts.filter(p => p.status === "draft" && !isHand(p)).slice(-3).reverse();
   v.innerHTML = `<div class="head home-head"><div><div class="eyebrow">✦ Votre espace de croissance</div><h1>${hello}${who() ? " " + esc(who()) : ""} 👋</h1><p>${c.queue ? `<b>${c.queue}</b> brouillon${c.queue > 1 ? "s" : ""} attend${c.queue > 1 ? "ent" : ""} votre validation.` : "Votre file est vide : c'est le moment de créer."}</p></div>
       <a class="btn primary" href="#/compose">${I.spark} Créer avec l'IA</a></div>
     <div class="kpis">
@@ -498,7 +517,7 @@ function lineFilter() {
 
 function vQueue(v) {
   const lf = store.get("lineFilter", "");
-  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && (!lf || p.line === lf)).slice().reverse();
+  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p) && (!lf || p.line === lf)).slice().reverse();
   v.innerHTML = `<div class="head"><div><h1>À valider</h1><p>Relisez, retouchez, validez. Rien ne part sur X ni sur LinkedIn sans votre feu vert.</p></div>
     <div class="row">${lineFilter()}<span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
     ${ps.length ? ps.map(p => tweetCard(p, "edit")).join("") : empty(I.check, "Tout est validé", "Aucun brouillon en attente.", `<a class="btn primary" href="#/compose">${I.spark} Créer des posts</a>`)}`;
@@ -972,6 +991,20 @@ const actions = {
     if (!fb) return toast("Écrivez d'abord ce qu'il faut changer", true), $(`[data-fb="${id}"]`).focus();
     await run(b, async () => { if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id]; return api(`/api/posts/${id}/rewrite`, { feedback: fb }) }, "Réécrit", { wait: "Réécriture…" });
   },
+  async "li-reply-draft"(b) {
+    const target = $("#rp-target").value.trim(), url = $("#rp-url").value.trim();
+    if (!target) return toast("Collez d'abord le texte", true);
+    await run(b, () => api("/api/reply-draft", { account: $("#rp-acc").value, target, url, comment: store.get("rmode", "reply") === "comment" }), "Brouillon ajouté : copiez-le puis postez-le vous-même", { wait: "Écriture…" });
+  },
+  async "hand-copy"(b) {
+    const id = b.dataset.id, ta = $(`[data-edit="${id}"]`), text = ta ? ta.value : (S.posts.find(x => x.id === id)?.text || "");
+    try { await navigator.clipboard.writeText(text); toast("Texte copié") } catch { toast("Copie impossible : sélectionnez le texte à la main", true) }
+  },
+  async "hand-done"(b) {
+    const id = b.dataset.id;
+    if (edits[id] !== undefined) { await api(`/api/posts/${id}/edit`, { text: edits[id] }); edits[id] = undefined }
+    await run(b, () => api(`/api/posts/${id}/handled`, {}), "Marqué comme traité");
+  },
   async "li-hooks"(b) {
     const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
     if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
@@ -1410,6 +1443,29 @@ const wizard = {
 };
 
 // ------------------------------------------------------------------ commentaires (campagnes de réponses)
+// ------------------------------------------------------------------ LinkedIn : réponses et commentaires (brouillons seulement)
+function vReplies(v) {
+  const lis = (S.accounts || []).filter(a => a.platform === "linkedin");
+  if (!lis.length) return v.innerHTML = `<div class="head"><div><h1>Réponses</h1></div></div>${empty(I.reply, "Aucun compte LinkedIn", "Ajoutez un compte LinkedIn dans les réglages.")}`;
+  const cur = store.get("liReplyAcc", lis[0].name), f = store.get("rf", "todo"), mode = store.get("rmode", "reply");
+  const all = S.posts.filter(p => isHand(p)).slice().reverse();
+  const lists = { todo: all.filter(p => p.status === "draft"), done: all.filter(p => p.status === "handled"), out: all.filter(p => p.status === "rejected") };
+  v.innerHTML = `<div class="head"><div><h1>Réponses LinkedIn</h1><p>Collez un commentaire reçu ou le post d'un autre : l'IA rédige un brouillon dans votre voix. Rien n'est lu ni envoyé sur LinkedIn : vous copiez le texte et le postez vous-même.</p></div></div>
+    <div class="card">
+      <div class="row"><select id="rp-acc" style="width:auto">${lis.map(a => `<option value="${esc(a.name)}" ${a.name === cur ? "selected" : ""}>${esc(a.displayName || a.name)} · ${esc(a.line || "")}</option>`).join("")}</select>
+        <div class="seg" id="rp-mode">${[["reply", "Répondre à un commentaire"], ["comment", "Commenter le post d'un autre"]].map(([k, l]) => `<button data-m="${k}" class="${k === mode ? "on" : ""}">${l}</button>`).join("")}</div></div>
+      <textarea id="rp-target" rows="5" style="margin-top:10px" placeholder="${mode === "comment" ? "Collez ici le texte du post à commenter" : "Collez ici le commentaire auquel répondre"}"></textarea>
+      <input id="rp-url" style="margin-top:8px" placeholder="Lien (facultatif, gardé tel quel, jamais ouvert par l'outil)">
+      <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="btn primary" data-act="li-reply-draft">${I.spark} Rédiger le brouillon</button></div>
+    </div>
+    <div class="seg" id="rf" style="margin:18px 0 12px">${[["todo", "À traiter", lists.todo.length], ["done", "Traités", lists.done.length], ["out", "Rejetés", lists.out.length]].map(([k, l, n]) => `<button data-f="${k}" class="${k === f ? "on" : ""}">${l} (${n})</button>`).join("")}</div>
+    ${lists[f].length ? lists[f].map(p => tweetCard(p, f === "todo" ? "hand" : "view")).join("") : empty(I.reply, f === "todo" ? "Aucun brouillon à traiter" : "Rien ici pour l'instant", f === "todo" ? "Collez un commentaire ou un post ci-dessus." : "")}`;
+  $("#rp-acc", v).onchange = e => store.set("liReplyAcc", e.target.value);
+  $$("#rp-mode button", v).forEach(b => b.onclick = () => { store.set("rmode", b.dataset.m); render() });
+  $$("#rf button", v).forEach(b => b.onclick = () => { store.set("rf", b.dataset.f); render() });
+  vQueueBind();
+}
+
 function vComments(v) {
   const camps = S.campaigns || [], stats = S.campaignStats || {}, f = store.get("cf", "todo");
   const replies = S.posts.filter(p => p.campaignId).slice().reverse();

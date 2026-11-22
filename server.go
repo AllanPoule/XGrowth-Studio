@@ -191,6 +191,13 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	post("/api/reply", func(r *http.Request, b map[string]any) (any, error) {
 		return st.DraftReply(r.Context(), s(b, "account"), s(b, "ref"), bl(b, "quote"))
 	})
+	post("/api/reply-draft", func(r *http.Request, b map[string]any) (any, error) {
+		// LinkedIn : brouillon de réponse ou de commentaire à partir du texte collé ; rien n'est envoyé
+		return st.DraftLinkedInReply(r.Context(), s(b, "account"), s(b, "target"), s(b, "url"), bl(b, "comment"))
+	})
+	post("/api/posts/{id}/handled", func(r *http.Request, b map[string]any) (any, error) {
+		return st.MarkHandled(r.PathValue("id"))
+	})
 	post("/api/write", func(r *http.Request, b map[string]any) (any, error) {
 		return st.AddDraft(s(b, "account"), s(b, "text"), s(b, "replyTo"), s(b, "quoteOf"), s(b, "media"))
 	})

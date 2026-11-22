@@ -73,7 +73,7 @@ var boolFlags = map[string]bool{
 	"pretty": true, "now": true, "quote": true, "draft": true, "premium": true, "auto-triage": true,
 	"auto-draft": true, "no-scheduler": true, "help": true, "no-auth": true,
 	"rules-auto-accept": true, "auto-synthesis": true, "auto-perf-analysis": true, "automated": true, "ideas-enabled": true,
-	"ideas-auto-draft": true, "ignore": true,
+	"ideas-auto-draft": true, "ignore": true, "comment": true,
 }
 
 type args struct {
@@ -269,6 +269,29 @@ func main() {
 	case "reply":
 		acct := need(a, 0, "reply <compte> <url|id> [--quote]")
 		p, err := st.DraftReply(ctx, acct, need(a, 1, "reply <compte> <url|id> [--quote]"), a.boolean("quote"))
+		check(err)
+		emit(p)
+
+	case "reply-draft":
+		// LinkedIn : brouillon de réponse (ou de commentaire avec --comment) à partir
+		// du texte collé dans un fichier ; rien n'est envoyé, le lien n'est jamais ouvert
+		usage := "reply-draft --account <compte> --target-file <fichier> [--url <lien>] [--comment]"
+		acct := a.str("account")
+		if acct == "" {
+			fail("invalid_input", fmt.Errorf("usage : %s", usage))
+		}
+		f := a.str("target-file")
+		if f == "" {
+			fail("invalid_input", fmt.Errorf("usage : %s", usage))
+		}
+		raw, err := os.ReadFile(f)
+		check(err)
+		p, err := st.DraftLinkedInReply(ctx, acct, string(raw), a.str("url"), a.boolean("comment"))
+		check(err)
+		emit(p)
+
+	case "handled":
+		p, err := st.MarkHandled(need(a, 0, "handled <id>"))
 		check(err)
 		emit(p)
 

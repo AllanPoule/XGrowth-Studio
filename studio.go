@@ -313,7 +313,7 @@ func (s *Studio) accountAndData(name string) (*Account, *Data, error) {
 
 var errXOnly = errors.New("fonction réservée aux comptes X : LinkedIn n'a ni veille ni signets")
 
-var errLinkedInReply = errors.New("LinkedIn : réponses et citations indisponibles dans cette version (commentaires = brouillons, plus tard)")
+var errLinkedInReply = errors.New("LinkedIn : pas de réponse ni de citation par lien ; collez le texte avec reply-draft (brouillon à poster à la main)")
 
 // AddDraft enregistre un brouillon écrit à la main (ou par un agent externe).
 func (s *Studio) AddDraft(account, text, replyTo, quoteOf, media string) (*Post, error) {
@@ -463,6 +463,9 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 		recordCorrection(d, p, s.now().UTC())
 		resetValidation(p)
 		resetTicCheck(p)
+		if handOnly(d.Account(p.Account), p) {
+			handWarnings(p)
+		}
 		p.UpdatedAt = s.now().UTC()
 		out = p
 		return nil
@@ -482,6 +485,9 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 		}
 		if err := editable(p); err != nil {
 			return err
+		}
+		if handOnly(d.Account(p.Account), p) {
+			return errors.New("une réponse ou un commentaire LinkedIn n'a pas de visuel")
 		}
 		if path != "" && isLinkedIn(d.Account(p.Account)) {
 			if _, err := readLinkedInImage(path); err != nil {
@@ -518,6 +524,9 @@ func (s *Studio) SetMediaAlt(id, alt string) (*Post, error) {
 		}
 		if err := editable(p); err != nil {
 			return err
+		}
+		if handOnly(d.Account(p.Account), p) {
+			return errors.New("une réponse ou un commentaire LinkedIn n'a pas de visuel")
 		}
 		if alt != "" && p.MediaPath == "" {
 			return errors.New("ce post n'a pas d'image : ajoutez le visuel avant son texte alternatif")
@@ -559,6 +568,9 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 		p.AIText = p.Text
 		resetValidation(p)
 		resetTicCheck(p)
+		if handOnly(d.Account(p.Account), p) {
+			handWarnings(p)
+		}
 		p.UpdatedAt = s.now().UTC()
 		d.Learnings = append(d.Learnings, Learning{ID: newID("l"), Account: p.Account, Text: feedback, Source: FeedbackRewrite, PostID: p.ID, CreatedAt: s.now().UTC()})
 		out = p
@@ -622,7 +634,7 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 	var taken []time.Time
 	for _, p := range d.Posts {
 		// les réponses de campagne ont leur propre rythme
-		if p.Account != a.Name || p.ID == skipID || p.CampaignID != "" {
+		if p.Account != a.Name || p.ID == skipID || p.CampaignID != "" || handOnly(a, p) {
 			continue
 		}
 		switch {
@@ -699,6 +711,9 @@ func (s *Studio) ValidateWith(id, by string, at *time.Time, now bool, opts Valid
 		p := d.Post(id)
 		if p == nil {
 			return fmt.Errorf("post %q inconnu", id)
+		}
+		if handOnly(d.Account(p.Account), p) {
+			return errHandOnly // verrou dur : statut inchangé, aucun appel backend
 		}
 		if p.Status != StatusDraft && p.Status != StatusFailed && p.Status != StatusRejected {
 			return fmt.Errorf("le post %s est %s : seul un brouillon peut être validé", id, p.Status)
@@ -779,7 +794,7 @@ func publishedToday(d *Data, a *Account, now time.Time) int {
 	today := now.In(loc).Format("2006-01-02")
 	n := 0
 	for _, p := range d.Posts {
-		if p.Account == a.Name && p.CampaignID == "" && p.Status == StatusPublished && p.PublishedAt != nil && p.PublishedAt.In(loc).Format("2006-01-02") == today {
+		if p.Account == a.Name && p.CampaignID == "" && !handOnly(a, p) && p.Status == StatusPublished && p.PublishedAt != nil && p.PublishedAt.In(loc).Format("2006-01-02") == today {
 			n++
 		}
 	}
@@ -821,6 +836,13 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			a := d.Account(p.Account)
 			if a == nil {
 				p.Status, p.Error = StatusFailed, "compte supprimé"
+				skip = p.Error
+				return nil
+			}
+			if handOnly(a, p) {
+				// jamais envoyé, même forgé en base avec une signature : retour en brouillon
+				resetValidation(p)
+				p.Error = "réponse ou commentaire LinkedIn : à poster à la main, renvoyé en brouillon"
 				skip = p.Error
 				return nil
 			}

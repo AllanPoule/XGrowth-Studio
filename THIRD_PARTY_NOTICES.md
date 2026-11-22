@@ -112,6 +112,7 @@ SOFTWARE.
   - `skills/linkedin-post-writer` (hooks: standalone first line within 210 characters, no question or "here's how" opener): `liHooksMethod`.
   - `skills/linkedin-humanizer` (humanizer and its AI-tells lists in `references/audit-ai-tells.md`; post audit in `sub-skills/post-audit.md`): `liHumanizerMethod`, `liAuditMethod` and the patterns of the deterministic detector `TicCheck`.
   - `skills/linkedin-content-planner` (7-day plan): `liPlanMethod`.
+  - `skills/linkedin-reply-handler` (reply to a comment: answer the question, concede then sharpen, extend, short) and `skills/linkedin-comment-drafter` (comment on someone else's post: add the missing piece, no generic praise), draft-only, used in `linkedin_reply.go`: `liReplyMethod`, `liCommentMethod`. Its Publora publishing and Apify reading are not used.
   - Always bent to the voice of the account (the voice of the account prevails over the method).
 
 ```
