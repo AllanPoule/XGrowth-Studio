@@ -258,7 +258,7 @@ func (s *Studio) PollSources(ctx context.Context, account string, force bool) []
 	every := time.Duration(orDefault(d.Settings.SourcesEveryMinutes, defaultSourcesEvery)) * time.Minute
 	out := []SourcesResult{} // toujours une liste, même vide
 	for _, a := range d.Accounts {
-		if (account != "" && !strings.EqualFold(a.Name, account)) || (a.Sources.Changelog == "" && a.Sources.GitHubUser == "") {
+		if isLinkedIn(a) || (account != "" && !strings.EqualFold(a.Name, account)) || (a.Sources.Changelog == "" && a.Sources.GitHubUser == "") {
 			continue
 		}
 		st := states.get(a.Name)
@@ -386,7 +386,7 @@ func (s *Studio) DraftNews(ctx context.Context) []NewsResult {
 	perDay := orDefault(d.Settings.NewsMaxPerDay, defaultNewsPerDay)
 	out := []NewsResult{} // toujours une liste, même vide
 	for _, a := range d.Accounts {
-		if !a.Sources.News {
+		if isLinkedIn(a) || !a.Sources.News {
 			continue
 		}
 		primary := map[string]bool{}

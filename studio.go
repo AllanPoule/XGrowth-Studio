@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -66,12 +67,48 @@ func (s *Studio) SaveAccount(a *Account) error {
 		return errors.New("le compte doit avoir un nom (--name)")
 	}
 	a.Handle = strings.TrimPrefix(strings.TrimSpace(a.Handle), "@")
-	switch a.Backend {
-	case "":
-		a.Backend = "dryrun"
-	case "agentx", "xapi", "dryrun":
+	switch a.Platform {
+	case "", PlatformX:
+		a.Platform = ""
+	case PlatformLinkedIn:
 	default:
-		return fmt.Errorf("backend %q inconnu : agentx, xapi ou dryrun", a.Backend)
+		return fmt.Errorf("plateforme %q inconnue : x ou linkedin", a.Platform)
+	}
+	a.Line = strings.TrimSpace(a.Line)
+	if isLinkedIn(a) {
+		if a.Line == "" {
+			return fmt.Errorf("un compte LinkedIn doit avoir une ligne éditoriale (--line %s)", strings.Join(linkedinLines, "|"))
+		}
+		if !validLinkedInLine(a.Line) {
+			return fmt.Errorf("ligne %q inconnue : %s", a.Line, strings.Join(linkedinLines, ", "))
+		}
+		switch a.Backend {
+		case "":
+			a.Backend = "dryrun"
+		case "manual", "dryrun":
+		case "linkedin":
+			return errors.New("le backend linkedin (publication par l'API) n'est pas encore disponible : utilisez manual ou dryrun")
+		default:
+			return fmt.Errorf("backend %q inconnu pour LinkedIn : manual ou dryrun", a.Backend)
+		}
+		if a.WeeklyCap < 0 {
+			return errors.New("le plafond hebdomadaire ne peut pas être négatif")
+		}
+		a.Premium = false // la limite LinkedIn ne dépend pas de X Premium
+	} else {
+		if a.Line != "" {
+			return errors.New("--line n'existe que pour un compte LinkedIn (--platform linkedin)")
+		}
+		switch a.Backend {
+		case "":
+			a.Backend = "dryrun"
+		case "agentx", "xapi", "dryrun":
+		case "manual", "linkedin":
+			return fmt.Errorf("le backend %q est réservé aux comptes LinkedIn", a.Backend)
+		default:
+			return fmt.Errorf("backend %q inconnu : agentx, xapi ou dryrun", a.Backend)
+		}
+		a.WeeklyCap, a.AuthorURN = 0, ""
 	}
 	if a.Timezone != "" {
 		if _, err := time.LoadLocation(a.Timezone); err != nil {
@@ -84,8 +121,8 @@ func (s *Studio) SaveAccount(a *Account) error {
 		}
 	}
 	sort.Strings(a.Slots)
-	if a.DailyLimit == 0 {
-		a.DailyLimit = 6
+	if a.DailyLimit == 0 && !isLinkedIn(a) {
+		a.DailyLimit = 6 // pas de cadence imposée sur LinkedIn : Allan règle son plafond
 	}
 	if err := normalizeTuning(a); err != nil {
 		return err
@@ -175,7 +212,7 @@ func (s *Studio) CheckAccount(ctx context.Context, name string) (*CheckResult, e
 	}
 	r.Profile = p
 	switch {
-	case a.Backend == "dryrun":
+	case a.Backend == "dryrun" || a.Backend == "manual":
 		r.OK = true
 	case p.ScreenName == "":
 		r.Problem = "le backend n'a pas renvoyé de compte connecté"
@@ -210,6 +247,9 @@ func Guard(d *Data, a *Account, text string) error {
 	if ph := Placeholders(t); len(ph) > 0 {
 		return fmt.Errorf("le texte contient encore %d repère(s) à compléter (%s) : remplacez-les par du vécu réel", len(ph), ph[0])
 	}
+	if isLinkedIn(a) && !validLinkedInLine(a.Line) {
+		return errors.New("un post LinkedIn doit porter une ligne éditoriale (perso, kinflux ou allan-drdrt)")
+	}
 	if n := utf8.RuneCountInString(t); n > maxLen(a) {
 		return fmt.Errorf("%d caractères, maximum %d pour ce compte", n, maxLen(a))
 	}
@@ -233,10 +273,14 @@ func Guard(d *Data, a *Account, text string) error {
 
 // ---------------------------------------------------------------- brouillons
 
-func (s *Studio) newPost(account, kind, text, rationale string) *Post {
+func (s *Studio) newPost(a *Account, kind, text, rationale string) *Post {
 	now := s.now().UTC()
-	return &Post{ID: newID("p"), Account: account, Kind: kind, Text: strings.TrimSpace(text), Rationale: rationale,
+	p := &Post{ID: newID("p"), Account: a.Name, Kind: kind, Text: strings.TrimSpace(text), Rationale: rationale,
 		Status: StatusDraft, CreatedAt: now, UpdatedAt: now}
+	if isLinkedIn(a) {
+		p.Line = a.Line // l'historique garde l'étiquette même si le compte change
+	}
+	return p
 }
 
 func (s *Studio) accountAndData(name string) (*Account, *Data, error) {
@@ -248,6 +292,10 @@ func (s *Studio) accountAndData(name string) (*Account, *Data, error) {
 	return a, d, nil
 }
 
+var errXOnly = errors.New("fonction réservée aux comptes X : LinkedIn n'a ni veille ni signets")
+
+var errLinkedInReply = errors.New("LinkedIn : réponses et citations indisponibles dans cette version (commentaires = brouillons, plus tard)")
+
 // AddDraft enregistre un brouillon écrit à la main (ou par un agent externe).
 func (s *Studio) AddDraft(account, text, replyTo, quoteOf, media string) (*Post, error) {
 	kind := "post"
@@ -256,12 +304,19 @@ func (s *Studio) AddDraft(account, text, replyTo, quoteOf, media string) (*Post,
 	} else if quoteOf != "" {
 		kind = "quote"
 	}
-	p := s.newPost(account, kind, text, "")
+	a, _, err := s.accountAndData(account)
+	if err != nil {
+		return nil, err
+	}
+	if isLinkedIn(a) && kind != "post" {
+		return nil, errLinkedInReply
+	}
+	p := s.newPost(a, kind, text, "")
 	p.ReplyTo, p.QuoteOf, p.MediaPath = parseTweetID(replyTo), parseTweetID(quoteOf), media
 	if p.Text == "" && media == "" {
 		return nil, errors.New("texte vide")
 	}
-	err := s.store.Update(func(d *Data) error {
+	err = s.store.Update(func(d *Data) error {
 		if d.Account(account) == nil {
 			return fmt.Errorf("compte %q inconnu", account)
 		}
@@ -290,7 +345,7 @@ func (s *Studio) GenerateDrafts(ctx context.Context, account, brief, itemID stri
 	}
 	var posts []*Post
 	for _, o := range outs {
-		p := s.newPost(a.Name, "post", o.Text, o.Rationale)
+		p := s.newPost(a, "post", o.Text, o.Rationale)
 		p.PostType, p.VisualBrief, p.AIText = o.Type, strings.TrimSpace(o.Visual), p.Text
 		if it != nil {
 			p.SourceItem = it.ID
@@ -314,6 +369,9 @@ func (s *Studio) DraftReply(ctx context.Context, account, ref string, quote bool
 	if err != nil {
 		return nil, err
 	}
+	if isLinkedIn(a) {
+		return nil, errLinkedInReply
+	}
 	be, err := s.backendFor(a)
 	if err != nil {
 		return nil, err
@@ -334,7 +392,7 @@ func (s *Studio) DraftReply(ctx context.Context, account, ref string, quote bool
 	if quote {
 		kind = "quote"
 	}
-	p := s.newPost(a.Name, kind, o.Text, o.Rationale)
+	p := s.newPost(a, kind, o.Text, o.Rationale)
 	p.TargetText, p.AIText = t.Text, p.Text
 	if quote {
 		p.QuoteOf = id
@@ -346,7 +404,7 @@ func (s *Studio) DraftReply(ctx context.Context, account, ref string, quote bool
 
 func editable(p *Post) error {
 	switch p.Status {
-	case StatusDraft, StatusScheduled, StatusValidated, StatusFailed, StatusRejected:
+	case StatusDraft, StatusScheduled, StatusValidated, StatusFailed, StatusRejected, StatusManual:
 		return nil
 	}
 	return fmt.Errorf("le post %s est %s : il ne peut plus être modifié", p.ID, p.Status)
@@ -463,7 +521,7 @@ func (s *Studio) Unschedule(id string) (*Post, error) {
 		if p == nil {
 			return fmt.Errorf("post %q inconnu", id)
 		}
-		if p.Status != StatusScheduled && p.Status != StatusValidated {
+		if p.Status != StatusScheduled && p.Status != StatusValidated && p.Status != StatusManual {
 			return fmt.Errorf("le post %s n'est pas planifié", id)
 		}
 		resetValidation(p)
@@ -492,7 +550,7 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
 			taken = append(taken, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			taken = append(taken, *p.PublishedAt)
@@ -555,8 +613,14 @@ func (s *Studio) Validate(id, by string, at *time.Time, now bool) (*Post, error)
 		if a == nil {
 			return fmt.Errorf("compte %q inconnu", p.Account)
 		}
+		if isLinkedIn(a) && p.Line == "" {
+			p.Line = a.Line // brouillon créé avant l'étiquette
+		}
 		if err := Guard(d, a, p.Text); err != nil {
 			return fmt.Errorf("validation refusée : %w", err)
+		}
+		if isLinkedIn(a) && !validLinkedInLine(p.Line) {
+			return errors.New("validation refusée : ce post LinkedIn n'a pas de ligne éditoriale valide")
 		}
 		t := s.now().UTC()
 		switch {
@@ -613,6 +677,7 @@ type PublishResult struct {
 	Account string `json:"account"`
 	Status  string `json:"status"`
 	TweetID string `json:"tweetId,omitempty"`
+	PostURN string `json:"postUrn,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
@@ -654,6 +719,11 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				skip = p.Error
 				return nil
 			}
+			if isLinkedIn(a) && !validLinkedInLine(p.Line) {
+				p.Status, p.Error = StatusFailed, "bloqué avant publication : ce post LinkedIn n'a pas de ligne éditoriale valide"
+				skip = p.Error
+				return nil
+			}
 			if p.CampaignID == "" && a.DailyLimit > 0 && publishedToday(d, a, s.now()) >= a.DailyLimit {
 				next, err := NextSlot(d, a, s.now().UTC(), p.ID)
 				if err != nil {
@@ -678,7 +748,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 		}
 		var tweetID string
 		be, err := s.backendFor(&acct)
-		if err == nil && acct.Backend != "dryrun" && acct.Handle != "" {
+		if err == nil && !isLinkedIn(&acct) && acct.Backend != "dryrun" && acct.Handle != "" {
 			// vérifie l'identité du compte connecté avant chaque envoi
 			var me *Profile
 			if me, err = be.Me(ctx); err == nil && !strings.EqualFold(me.ScreenName, acct.Handle) {
@@ -696,10 +766,23 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			}
 			t := s.now().UTC()
 			p.UpdatedAt = t
+			if errors.Is(err, errManualPublish) {
+				// pas une panne : le post reste validé, daté, et attend Allan
+				p.Status, p.Error = StatusManual, errManualPublish.Error()
+				d.AddLog("info", "post %s (LinkedIn, %s) à publier à la main", id, p.Line)
+				r.Status, r.Error = StatusManual, p.Error
+				return nil
+			}
 			if err != nil {
 				p.Status, p.Error = StatusFailed, err.Error()
 				d.AddLog("error", "publication de %s (@%s) échouée : %v", id, acct.Handle, err)
 				r.Status, r.Error = StatusFailed, err.Error()
+				return nil
+			}
+			if isLinkedIn(&acct) {
+				p.Status, p.PostURN, p.PublishedAt, p.Error = StatusPublished, tweetID, &t, ""
+				d.AddLog("info", "publié %s sur LinkedIn (%s, %s, %s)", id, p.Line, tweetID, acct.Backend)
+				r.Status, r.PostURN = StatusPublished, tweetID
 				return nil
 			}
 			p.Status, p.TweetID, p.PublishedAt, p.Error = StatusPublished, tweetID, &t, ""
@@ -710,6 +793,43 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 		results = append(results, r)
 	}
 	return results
+}
+
+// MarkPublished : Allan a publié à la main un post LinkedIn rangé en « manual ».
+// Seul un post déjà validé (signé) peut être marqué publié ; rien n'est envoyé.
+func (s *Studio) MarkPublished(id, url string) (*Post, error) {
+	var out *Post
+	u := strings.TrimSpace(url)
+	if u != "" {
+		pu, perr := neturl.Parse(u)
+		if perr != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Hostname() == "" {
+			return nil, errors.New("url invalide : une adresse http(s) complète est attendue")
+		}
+		if strings.ContainsAny(u, " \t\r\n\"'<>`") {
+			return nil, errors.New("url invalide : caractères interdits")
+		}
+	}
+	err := s.store.Update(func(d *Data) error {
+		p := d.Post(id)
+		if p == nil {
+			return fmt.Errorf("post %q inconnu", id)
+		}
+		if p.Status != StatusManual {
+			return fmt.Errorf("le post %s est %s : seul un post « à publier à la main » peut être marqué publié", id, p.Status)
+		}
+		if p.ValidatedBy == "" || p.ValidatedAt == nil {
+			return fmt.Errorf("le post %s n'a pas été validé", id)
+		}
+		t := s.now().UTC()
+		p.Status, p.PublishedAt, p.Error, p.UpdatedAt = StatusPublished, &t, "", t
+		if u != "" {
+			p.PostURN = u
+		}
+		d.AddLog("info", "post %s publié à la main sur LinkedIn (%s)", id, p.Line)
+		out = p
+		return nil
+	})
+	return out, err
 }
 
 // ---------------------------------------------------------------- veille
@@ -753,6 +873,9 @@ func (s *Studio) PollWatch(ctx context.Context, account string, force bool) []Fe
 	for _, a := range d.Accounts {
 		if account != "" && !strings.EqualFold(a.Name, account) {
 			continue
+		}
+		if isLinkedIn(a) {
+			continue // la veille X n'existe pas pour LinkedIn
 		}
 		be, err := s.backendFor(a)
 		if err != nil {
@@ -801,6 +924,9 @@ func (s *Studio) ImportBookmarks(ctx context.Context, account string, n int) (Fe
 	if err != nil {
 		return FetchResult{}, err
 	}
+	if isLinkedIn(a) {
+		return FetchResult{}, errXOnly
+	}
 	be, err := s.backendFor(a)
 	if err != nil {
 		return FetchResult{}, err
@@ -816,6 +942,9 @@ func (s *Studio) AddItem(ctx context.Context, account, ref string) (*Item, error
 	a, _, err := s.accountAndData(account)
 	if err != nil {
 		return nil, err
+	}
+	if isLinkedIn(a) {
+		return nil, errXOnly
 	}
 	be, err := s.backendFor(a)
 	if err != nil {
@@ -863,7 +992,7 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 		if account != "" && !strings.EqualFold(a.Name, account) {
 			continue
 		}
-		if onlyAuto && !a.AutoTriage {
+		if isLinkedIn(a) || (onlyAuto && !a.AutoTriage) {
 			continue
 		}
 		var pending []*Item
@@ -933,8 +1062,8 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 			continue
 		}
 		a := d.Account(p.Account)
-		if a == nil {
-			continue
+		if a == nil || isLinkedIn(a) {
+			continue // LinkedIn : aucune mesure disponible (« indisponible », jamais 0)
 		}
 		be, err := s.backendFor(a)
 		if err != nil {

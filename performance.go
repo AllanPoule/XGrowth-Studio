@@ -499,7 +499,7 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 	var passed, aiFailed []string
 	interrupted := false
 	for _, a := range accounts {
-		if auto && !perfAccountDue(d, a.Name, now) {
+		if isLinkedIn(a) || (auto && !perfAccountDue(d, a.Name, now)) {
 			continue
 		}
 		dg := ComputePerfDigest(d, a.Name, now)
@@ -796,6 +796,9 @@ func perfSeedState(d *Data) {
 // posts depuis. Comme dans perfEligible, les publications simulées
 // (« dry-… ») ne comptent pas : elles ne seront jamais mesurées.
 func perfAccountDue(d *Data, account string, now time.Time) bool {
+	if isLinkedIn(d.Account(account)) {
+		return false // aucune mesure LinkedIn : rien à analyser
+	}
 	if !d.Settings.AutoPerfAnalysis || now.Before(d.Settings.PerfState[perfKey(account)].NextAt) {
 		return false
 	}

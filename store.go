@@ -29,6 +29,7 @@ const (
 	StatusPublished  = "published"
 	StatusFailed     = "failed"
 	StatusRejected   = "rejected"
+	StatusManual     = "manual" // LinkedIn, backend manuel : validé, à publier à la main
 )
 
 // Statuts d'un contenu de veille.
@@ -54,7 +55,11 @@ type Account struct {
 	Name          string        `json:"name"`
 	Handle        string        `json:"handle"`
 	DisplayName   string        `json:"displayName,omitempty"`
-	Backend       string        `json:"backend"`                 // agentx | xapi | dryrun
+	Platform      string        `json:"platform,omitempty"`      // "" ou x | linkedin
+	Line          string        `json:"line,omitempty"`          // LinkedIn : ligne éditoriale (perso | kinflux | allan-drdrt)
+	WeeklyCap     int           `json:"weeklyCap,omitempty"`     // LinkedIn : plafond de posts par semaine (réglé au lot 3 ; 0 = aucun)
+	AuthorURN     string        `json:"authorURN,omitempty"`     // LinkedIn : urn:li:person:… (renseigné au lot 2)
+	Backend       string        `json:"backend"`                 // X : agentx | xapi | dryrun ; LinkedIn : manual | dryrun (linkedin : lot 2)
 	AgentxAccount string        `json:"agentxAccount,omitempty"` // nom passé à `agentx -a`
 	XAPITokenEnv  string        `json:"xapiTokenEnv,omitempty"`  // variable d'env. du jeton OAuth2 utilisateur
 	Premium       bool          `json:"premium"`                 // autorise > 280 caractères
@@ -122,6 +127,8 @@ type Post struct {
 	ValidatedAt *time.Time `json:"validatedAt,omitempty"`
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	TweetID     string     `json:"tweetId,omitempty"`
+	Line        string     `json:"line,omitempty"`       // LinkedIn : ligne éditoriale, copiée du compte à la création
+	PostURN     string     `json:"postUrn,omitempty"`    // LinkedIn : identifiant du post publié (ou lien saisi à la main)
 	CampaignID  string     `json:"campaignId,omitempty"` // réponse rédigée pour une campagne
 	Error       string     `json:"error,omitempty"`
 	SourceItem  string     `json:"sourceItem,omitempty"`
@@ -584,3 +591,25 @@ func (d *Data) RemoveAccount(name string) error {
 	}
 	return fmt.Errorf("compte %q inconnu", name)
 }
+
+// ---------------------------------------------------------------- plateformes
+
+const (
+	PlatformX        = "x"
+	PlatformLinkedIn = "linkedin"
+)
+
+// linkedinLines : les lignes éditoriales d'Allan sur LinkedIn.
+var linkedinLines = []string{"perso", "kinflux", "allan-drdrt"}
+
+func validLinkedInLine(l string) bool {
+	for _, x := range linkedinLines {
+		if x == l {
+			return true
+		}
+	}
+	return false
+}
+
+// isLinkedIn : le compte publie sur LinkedIn (tout autre compte est un compte X).
+func isLinkedIn(a *Account) bool { return a != nil && a.Platform == PlatformLinkedIn }

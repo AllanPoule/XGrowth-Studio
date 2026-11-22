@@ -353,7 +353,7 @@ func (s *Studio) DraftIdea(ctx context.Context, id string) (*Post, error) {
 		return nil, errors.New("l'IA n'a rien rédigé")
 	}
 	o := outs[0]
-	p := s.newPost(a.Name, "post", o.Text, o.Rationale)
+	p := s.newPost(a, "post", o.Text, o.Rationale)
 	p.PostType, p.VisualBrief, p.AIText, p.IdeaID = o.Type, strings.TrimSpace(o.Visual), p.Text, i.ID
 	err = s.store.Update(func(d *Data) error {
 		x := d.Idea(id)
@@ -452,7 +452,7 @@ func nextWindowSlot(d *Data, a *Account, after time.Time, skipID string) (time.T
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
 			taken = append(taken, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			taken = append(taken, *p.PublishedAt)

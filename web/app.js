@@ -115,12 +115,15 @@ function rel(t) {
 const nf = n => new Intl.NumberFormat("fr-FR", { notation: n >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(n || 0);
 const acct = n => (S.accounts || []).find(a => a.name === n);
 const handleOf = n => acct(n)?.handle || n;
-const maxLen = n => acct(n)?.premium ? 4000 : 280;
+const isLI = n => acct(n)?.platform === "linkedin";
+const maxLen = n => isLI(n) ? 3000 : acct(n)?.premium ? 4000 : 280;
+const LINES = ["perso", "kinflux", "allan-drdrt"];
+const linePill = p => p.line ? `<span class="pill accent" title="Ligne éditoriale">${esc(p.line)}</span>` : "";
 // affiner l'IA : types de posts et consignes effectifs d'un compte (compte → commun → défaut)
 const typesFor = a => (a?.postTypes?.length ? a.postTypes : S.settings.postTypes) || [];
 const typeLabel = (accName, key) => typesFor(acct(accName)).find(t => t.key === key)?.label || key;
 const inheritedPrompt = k => S.settings.prompts?.[k] || S.defaults?.prompts?.[k] || "";
-const tweetURL = p => p.tweetId && !String(p.tweetId).startsWith("dry-") ? `https://x.com/${handleOf(p.account)}/status/${p.tweetId}` : null;
+const tweetURL = p => p.postUrn && /^https?:\/\//.test(p.postUrn) ? p.postUrn : p.tweetId && !String(p.tweetId).startsWith("dry-") ? `https://x.com/${handleOf(p.account)}/status/${p.tweetId}` : null;
 const who = () => store.get("who", "");
 const providerName = id => (P || []).find(p => p.id === id)?.name || ({ "claude-code": "Claude Code", codex: "Codex (ChatGPT)", gemini: "Gemini CLI", anthropic: "API Claude" }[id] || id);
 
@@ -130,7 +133,7 @@ function ring(n, max) {
   return `<svg class="ring ${cls}" viewBox="0 0 26 26"><circle class="bgc" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5"/><circle class="fg" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct)}" transform="rotate(-90 13 13)" stroke-linecap="round"/></svg>`;
 }
 
-const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"] };
+const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"], manual: ["À publier à la main", "warn"] };
 const statusPill = s => { const [l, c] = STATUS[s] || [s, ""]; return `<span class="pill ${c}">${l}</span>` };
 const KIND = { reply: "Réponse", quote: "Citation", post: "" };
 
@@ -245,7 +248,7 @@ function render() {
 
 // ------------------------------------------------------------------ composants
 function tweetCard(p, mode) {
-  const a = acct(p.account), h = a?.handle || p.account;
+  const a = acct(p.account), h = a?.handle || p.account, li = a?.platform === "linkedin";
   const text = edits[p.id] ?? p.text, n = len(text), max = maxLen(p.account);
   const editable = mode === "edit";
   const when = p.status === "published" ? `· ${rel(p.publishedAt)}` : p.scheduledAt ? `· ${I.clock.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${fmtDate(p.scheduledAt)}` : `· créé ${rel(p.createdAt)}`;
@@ -254,19 +257,20 @@ function tweetCard(p, mode) {
   return `<article class="tweet" data-id="${p.id}">
     <div class="av">${esc(h[0] || "x")}</div>
     <div style="min-width:0">
-      <div class="tw-head"><b>${esc(a?.displayName || h)}</b><span class="h">@${esc(h)}</span><span class="h small">${when}</span><span class="spacer"></span>${p.postType ? `<span class="pill">${esc(typeLabel(p.account, p.postType))}</span>` : ""}${KIND[p.kind] ? `<span class="pill">${KIND[p.kind]}</span>` : ""}${statusPill(p.status)}</div>
+      <div class="tw-head"><b>${esc(a?.displayName || h)}</b><span class="h">${li ? esc(h) : "@" + esc(h)}</span><span class="h small">${when}</span><span class="spacer"></span>${linePill(p)}${p.postType ? `<span class="pill">${esc(typeLabel(p.account, p.postType))}</span>` : ""}${KIND[p.kind] ? `<span class="pill">${KIND[p.kind]}</span>` : ""}${statusPill(p.status)}</div>
       ${target}
       ${editable ? `<textarea class="tw-edit" data-edit="${p.id}" rows="4">${esc(text)}</textarea>` : `<div class="tw-text">${markPlaceholders(text)}</div>`}
       ${placeholders(text).length ? `<div class="tw-err">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')} ${placeholders(text).length} repère(s) « À COMPLÉTER » à remplacer par du vécu réel avant de valider : ${placeholders(text).map(esc).join(" · ")}</div>` : ""}
       <div class="tw-meta">${editable ? `${ring(n, max)}<span class="cnt ${n > max ? "over" : ""}" data-cnt="${p.id}">${n} / ${max}</span>` : ""}
         ${p.mediaPath ? `<span class="pill">🖼 ${esc(p.mediaPath.split("/").pop())}</span>` : ""}
         ${p.validatedBy ? `<span class="pill">${I.shield.replace("<svg", '<svg style="width:12px;height:12px"')} ${esc(p.validatedBy)}</span>` : ""}
-        ${p.metrics ? `<span class="small muted">👁 ${nf(p.metrics.views)} · ♥ ${nf(p.metrics.likes)} · ↻ ${nf(p.metrics.retweets)} · ${p.metrics.engagementRatePct.toFixed(1)} %</span>` : ""}
-        ${url ? `<a class="small" href="${url}" target="_blank" rel="noopener">Voir sur X ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
+        ${li && p.status === "published" ? `<span class="small muted">Statistiques indisponibles</span>` : ""}
+        ${p.metrics && !li ? `<span class="small muted">👁 ${nf(p.metrics.views)} · ♥ ${nf(p.metrics.likes)} · ↻ ${nf(p.metrics.retweets)} · ${p.metrics.engagementRatePct.toFixed(1)} %</span>` : ""}
+        ${url ? `<a class="small" href="${esc(url)}" target="_blank" rel="noopener">${li ? "Voir sur LinkedIn" : "Voir sur X"} ${I.ext.replace("<svg", '<svg style="width:12px;height:12px;vertical-align:-1px"')}</a>` : ""}</div>
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
-      ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span><button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
+      ${mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
 }
 
@@ -297,7 +301,7 @@ function vHome(v) {
   const now = Date.now(), d30 = now - 30 * 864e5, d7 = now + 7 * 864e5;
   const pub = S.posts.filter(p => p.status === "published");
   const pub30 = pub.filter(p => new Date(p.publishedAt) > d30);
-  const planned = S.posts.filter(p => (p.status === "scheduled" || p.status === "validated") && p.scheduledAt).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const planned = S.posts.filter(p => (p.status === "scheduled" || p.status === "validated" || p.status === "manual") && p.scheduledAt).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
   const views = pub30.reduce((s, p) => s + (p.metrics?.views || 0), 0);
   const withM = pub30.filter(p => p.metrics?.views);
   const eng = withM.length ? withM.reduce((s, p) => s + p.metrics.engagementRatePct, 0) / withM.length : 0;
@@ -486,13 +490,13 @@ function vCalendar(v) {
   const off = +store.get("weekOff", 0);
   const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() + off * 7);
   const days = [...Array(7)].map((_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d });
-  const evs = S.posts.filter(p => ["scheduled", "validated", "publishing", "published"].includes(p.status)).map(p => ({ p, t: new Date(p.status === "published" ? p.publishedAt : p.scheduledAt) }));
+  const evs = S.posts.filter(p => ["scheduled", "validated", "publishing", "manual", "published"].includes(p.status)).map(p => ({ p, t: new Date(p.status === "published" ? p.publishedAt : p.scheduledAt) }));
   const sameDay = (a, b) => a.toDateString() === b.toDateString();
-  const planned = S.posts.filter(p => p.status === "scheduled" || p.status === "validated").sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const planned = S.posts.filter(p => p.status === "scheduled" || p.status === "validated" || p.status === "manual").sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
   v.innerHTML = `<div class="head"><div><h1>Calendrier</h1><p>${planned.length} post${planned.length > 1 ? "s" : ""} planifié${planned.length > 1 ? "s" : ""}.</p></div>
     <div class="row"><button class="btn sm" data-act="week" data-d="-1">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
     <div class="week">${days.map(d => `<div class="day ${sameDay(d, new Date()) ? "today" : ""}" data-dropday="${dayKey(d)}"><div class="d">${d.toLocaleDateString("fr-FR", { weekday: "short" })}<b>${d.getDate()}</b></div>
-      ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${e.p.status === "scheduled" && !e.p.campaignId ? ` draggable="true" data-drag="planned" data-id="${e.p.id}"` : ""}><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · @${esc(handleOf(e.p.account))}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
+      ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${e.p.status === "scheduled" && !e.p.campaignId ? ` draggable="true" data-drag="planned" data-id="${e.p.id}"` : ""}><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · ${isLI(e.p.account) ? "" : "@"}${esc(handleOf(e.p.account))} ${linePill(e.p)}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
     <h2>File de publication</h2>${planned.length ? `<p class="hint" style="margin-top:-6px">Glissez un post sur un jour pour le caler au premier créneau libre de ce jour, ou dans la file pour changer l'ordre.</p>
       <div data-dropqueue>${planned.map(p => p.status === "scheduled" && !p.campaignId ? `<div draggable="true" data-drag="planned" data-id="${p.id}">${tweetCard(p, "planned")}</div>` : tweetCard(p, "planned")).join("")}</div>` : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
   bindDnD(v);
@@ -574,7 +578,7 @@ function vPublished(v) {
     ${last.length > 1 ? `<h2>Vues des derniers posts</h2><div class="card"><svg viewBox="0 0 ${last.length * 30} 120" style="width:100%;height:140px" preserveAspectRatio="none"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs>${last.map((p, i) => { const h = Math.max(2, (p.metrics.views / maxV) * 112); return `<rect x="${i * 30 + 5}" y="${120 - h}" width="20" height="${h}" rx="4" fill="url(#bg)"><title>${esc(p.text.slice(0, 80))} — ${p.metrics.views} vues</title></rect>` }).join("")}</svg></div>` : ""}
     ${top.length ? `<h2>Meilleurs posts</h2>${top.map(p => tweetCard(p, "view")).join("")}` : ""}
     <h2>Historique</h2>${ps.length ? `<div class="card" style="padding:6px 8px;overflow-x:auto"><table><tr><th>Date</th><th>Post</th><th class="num">Vues</th><th class="num">♥</th><th class="num">↻</th><th class="num">Eng.</th></tr>
-      ${ps.map(p => { const m = p.metrics || {}, u = tweetURL(p); return `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(p.publishedAt, { dateStyle: "short", timeStyle: "short" })}</td><td>${u ? `<a href="${u}" target="_blank" rel="noopener">` : ""}${esc(p.text.slice(0, 110))}${p.text.length > 110 ? "…" : ""}${u ? "</a>" : ""}</td><td class="num">${m.views != null ? nf(m.views) : "–"}</td><td class="num">${m.likes ?? "–"}</td><td class="num">${m.retweets ?? "–"}</td><td class="num">${m.views ? m.engagementRatePct.toFixed(1) + " %" : "–"}</td></tr>` }).join("")}</table></div>` : empty(I.chart, "Pas encore de publication", "Vos posts publiés et leurs statistiques apparaîtront ici.")}`;
+      ${ps.map(p => { const m = p.metrics || {}, u = tweetURL(p); return `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(p.publishedAt, { dateStyle: "short", timeStyle: "short" })}</td><td>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener">` : ""}${esc(p.text.slice(0, 110))}${p.text.length > 110 ? "…" : ""}${u ? "</a>" : ""}</td><td class="num">${m.views != null ? nf(m.views) : "–"}</td><td class="num">${m.likes ?? "–"}</td><td class="num">${m.retweets ?? "–"}</td><td class="num">${m.views ? m.engagementRatePct.toFixed(1) + " %" : "–"}</td></tr>` }).join("")}</table></div>` : empty(I.chart, "Pas encore de publication", "Vos posts publiés et leurs statistiques apparaîtront ici.")}`;
 }
 
 // ------------------------------------------------------------------ réglages
@@ -730,6 +734,7 @@ function vSettings(v) {
       <div id="ai-out"></div></div>
     <h2>Comptes X</h2>${S.accounts.map(accountForm).join("")}
     <div class="card"><div class="row between"><div><h3>Ajouter un compte</h3><p class="small muted" style="margin:0">L'assistant vous guide : connexion à X, voix, rythme.</p></div><button class="btn" data-act="wizard-account">Ajouter</button></div></div>
+    <div class="card"><div class="row between"><div><h3>Ajouter un compte LinkedIn</h3><p class="small muted" style="margin:0">Une ligne éditoriale par compte (perso, kinflux, allan-drdrt). Publication à la main ou simulation pour l'instant.</p></div><button class="btn" data-act="add-linkedin">Ajouter</button></div></div>
     <h2>Affiner l'IA</h2>
     <div class="card" id="tune-common"><p class="small muted" style="margin-top:0">Valable pour tous les comptes. Chaque compte peut remplacer ces réglages (Comptes X › Modifier › Affiner l'IA pour ce compte).</p>
       <label class="l" for="rules">Règles d'écriture communes</label><textarea id="rules" rows="4" placeholder="Une règle par ligne. Ex. : N'invente jamais un chiffre.">${esc((s.rules || []).join("\n"))}</textarea>
@@ -766,6 +771,8 @@ function vSettings(v) {
 function syncTypesEmpty(box) { box.parentElement.querySelector(".ptypes-empty")?.classList.toggle("hidden", !!box.children.length) }
 
 function accountForm(a) {
+  const li = a.platform === "linkedin";
+  if (li) return linkedinAccountForm(a);
   const be = { agentx: "AgentX (session X)", xapi: "API X officielle", dryrun: "Simulation" }[a.backend] || a.backend;
   return `<div class="card" data-acc="${esc(a.name)}">
     <div class="row"><div class="av sm">${esc((a.handle || a.name)[0])}</div><div><b>@${esc(a.handle || a.name)}</b><div class="small muted">${be} · ${esc(a.timezone)} · ${(a.slots || []).join(", ")}</div></div><span class="spacer"></span>
@@ -827,6 +834,24 @@ function accountForm(a) {
       <div class="row" style="margin-top:16px"><button class="btn ghost danger sm" data-act="acc-del" data-name="${esc(a.name)}">Supprimer</button><span class="spacer"></span><button class="btn primary" data-act="acc-save" data-name="${esc(a.name)}">Enregistrer</button></div></div></div>`;
 }
 
+function linkedinAccountForm(a) {
+  const be = { manual: "Publication à la main", dryrun: "Simulation", linkedin: "API LinkedIn" }[a.backend] || a.backend;
+  return `<div class="card" data-acc="${esc(a.name)}">
+    <div class="row"><div class="av sm">in</div><div><b>${esc(a.displayName || a.name)}</b> <span class="pill accent">${esc(a.line)}</span><div class="small muted">LinkedIn · ${be} · ${esc(a.timezone)} · ${(a.slots || []).join(", ")}</div></div><span class="spacer"></span>
+      <button class="btn sm" data-act="acc-check" data-name="${esc(a.name)}">${I.shield} Vérifier la connexion</button><button class="btn sm ghost" data-act="acc-toggle">Modifier</button></div>
+    <div class="acc-body hidden">
+      <div class="grid"><div><label class="l">Ligne éditoriale</label><select name="line">${LINES.map(l => `<option ${a.line === l ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <div><label class="l">Publication</label><select name="backend">${[["manual", "À la main (repli sûr)"], ["dryrun", "Simulation"]].map(([k, l]) => `<option value="${k}" ${a.backend === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <div><label class="l">Fuseau horaire</label><input name="timezone" value="${esc(a.timezone)}"></div>
+        <div><label class="l">Créneaux</label><input name="slots" value="${esc((a.slots || []).join(", "))}"></div></div>
+      <div class="hint">Un post LinkedIn ne part jamais sans votre validation signée. Limite : 3 000 caractères. Statistiques indisponibles.</div>
+      <label class="l">Voix</label><textarea name="voice" rows="6">${esc(a.voice)}</textarea>
+      <label class="l">Consignes</label><textarea name="instructions">${esc(a.instructions)}</textarea>
+      <label class="l">Sujets</label><input name="topics" value="${esc((a.topics || []).join(", "))}">
+      <div class="grid"><div><label class="l">Longueur visée</label><select name="length">${[["court", "Courte (300 à 600 caractères)"], ["moyen", "Moyenne (600 à 1 200)"], ["long", "Longue (1 200 à 2 000)"]].map(([k, l]) => `<option value="${k}" ${(a.length || "court") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
+      <div class="row" style="margin-top:16px"><button class="btn ghost danger sm" data-act="acc-del" data-name="${esc(a.name)}">Supprimer</button><span class="spacer"></span><button class="btn primary" data-act="acc-save" data-name="${esc(a.name)}">Enregistrer</button></div></div></div>`;
+}
+
 function readAccountForm(card, base) {
   const o = { ...base };
   o.timing = { ...(base.timing || {}) }; o.ideas = { ...(base.ideas || {}) };
@@ -844,8 +869,8 @@ function readAccountForm(card, base) {
     else if (k === "examples") o[k] = i.value.split(/^\s*---\s*$/m).map(x => x.trim()).filter(Boolean);
     else o[k] = i.value.trim();
   });
-  o.postTypes = readTypes(card);
-  o.prompts = readPrompts(card);
+  if ($("[data-types]", card)) o.postTypes = readTypes(card);
+  if ($("[data-prompt]", card)) o.prompts = readPrompts(card);
   return o;
 }
 
@@ -884,6 +909,12 @@ const actions = {
     if (!fb) return toast("Écrivez d'abord ce qu'il faut changer", true), $(`[data-fb="${id}"]`).focus();
     await run(b, async () => { if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id]; return api(`/api/posts/${id}/rewrite`, { feedback: fb }) }, "Réécrit", { wait: "Réécriture…" });
   },
+  async "add-linkedin"(b) {
+    const line = (prompt("Ligne éditoriale : " + LINES.join(", ")) || "").trim();
+    if (!line) return;
+    await run(b, () => api("/api/accounts", { name: "linkedin-" + line, platform: "linkedin", line, backend: "manual", language: "français", timezone: "Europe/Paris", slots: ["09:00", "12:30", "18:00"] }), "Compte LinkedIn ajouté");
+  },
+  async "mark-published"(b) { const url = (prompt("Lien du post LinkedIn (facultatif) :") || "").trim(); await run(b, () => api(`/api/posts/${b.dataset.id}/mark-published`, { url }), "Marqué comme publié") },
   async unschedule(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/unschedule`, {}), "Renvoyé en brouillon") },
   async "publish-due"(b) { await run(b, () => api("/api/publish-due", {}), r => r.length ? `${r.length} post(s) traité(s)` : "Rien n'était dû") },
   async week(b) { const d = +b.dataset.d; store.set("weekOff", d === 0 ? 0 : +store.get("weekOff", 0) + d); render() },
