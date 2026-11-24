@@ -424,15 +424,15 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := writeFileDurable(s.path, b); err != nil {
 		return err
 	}
 	if st, err := os.Stat(s.path); err == nil {
 		s.modTime = st.ModTime()
+	}
+	// sauvegarde du jour : un échec n'invalide pas l'écriture principale
+	if err := backupIfDue(filepath.Dir(s.path), time.Now()); err != nil {
+		fmt.Fprintln(os.Stderr, "xgrowth : sauvegarde impossible :", err)
 	}
 	return nil
 }
