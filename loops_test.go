@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -140,14 +141,49 @@ func TestAICallTimeoutOnlyForScheduler(t *testing.T) {
 	e.st.aiCallTimeout = 20 * time.Millisecond
 	b := newBlockingAI()
 	e.st.ai = func(Settings) AI { return b }
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// contexte appelant sans délai, annulé à la main après 200 ms
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_ = e.st.aiFor(nil).JSON(ctx, "", "", nil, nil)
-	_, errs := b.result()
-	if len(errs) != 1 || !errors.Is(errs[0], context.DeadlineExceeded) {
-		t.Fatal("erreur inattendue")
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	err := e.st.aiFor(nil).JSON(ctx, "", "", nil, nil)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("erreur inattendue : %v", err)
 	}
-	// c'est le délai du contexte appelant (300 ms) qui a coupé, pas les 20 ms
+	if d := time.Since(start); d < 150*time.Millisecond {
+		t.Fatalf("appel manuel coupé trop tôt (%s) : le délai du planificateur a fuité", d)
+	}
+}
+
+// serveWithScheduler ne rend la main qu'une fois le planificateur terminé.
+func TestServeWithSchedulerWaitsForScheduler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var finished atomic.Bool
+	started := make(chan struct{})
+	sched := func(c context.Context) {
+		close(started)
+		<-c.Done()
+		time.Sleep(150 * time.Millisecond)
+		finished.Store(true)
+	}
+	srv := func(c context.Context) error { <-c.Done(); return nil }
+	go func() { <-started; cancel() }()
+	if err := serveWithScheduler(ctx, srv, sched, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !finished.Load() {
+		t.Fatal("serveWithScheduler est revenu avant la fin du planificateur")
+	}
+}
+
+// Une panne du serveur lui-même arrête aussi le planificateur.
+func TestServeWithSchedulerServeErrorStopsScheduler(t *testing.T) {
+	var stopped atomic.Bool
+	sched := func(c context.Context) { <-c.Done(); stopped.Store(true) }
+	srv := func(context.Context) error { return errors.New("listen") }
+	if err := serveWithScheduler(context.Background(), srv, sched, 5*time.Second); err == nil || !stopped.Load() {
+		t.Fatalf("err=%v stopped=%v", err, stopped.Load())
+	}
 }
 
 // Pas de chevauchement : un passage IA lancé pendant qu'un autre tourne est sauté.

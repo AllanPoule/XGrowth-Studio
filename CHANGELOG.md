@@ -41,7 +41,7 @@ dernière version.
   LinkedIn), l'autre pour les traitements IA (veille, tri, actualités, campagnes, synthèse, analyse). Un
   fournisseur IA lent ou bloqué ne retarde plus un post programmé. Chaque appel IA du planificateur a un délai
   maximal de 3 minutes, au plus 2 appels IA simultanés, et un passage n'en chevauche jamais un autre de la même
-  boucle. Arrêt propre des deux boucles à la fermeture. `GET /api/scheduler` donne l'heure du dernier passage de
+  boucle. Arrêt propre des deux boucles à la fermeture (`run` comme `serve`, qui attend la fin du planificateur, 30 s au plus). `GET /api/scheduler` donne l'heure du dernier passage de
   chaque boucle. Les demandes manuelles ne sont pas coupées par ce délai.
 
 ## V0.10 — 19 novembre 2026

@@ -556,10 +556,14 @@ func main() {
 				fmt.Fprintf(os.Stderr, "xgrowth : premier lancement. Code d'installation : %s (aussi dans %s/setup-code.txt)\n", code, homeDir())
 			}
 		}
+		var sched func(context.Context)
 		if !a.boolean("no-scheduler") {
-			go runScheduler(ctx, st, time.Duration(a.integer("every", 60))*time.Second, false)
+			every := time.Duration(a.integer("every", 60)) * time.Second
+			sched = func(c context.Context) { runScheduler(c, st, every, false) }
 		}
-		check(serve(ctx, st, ServeOptions{Addr: addr, Hosts: splitList(a.str("host")), NoAuth: noAuth}))
+		check(serveWithScheduler(ctx, func(c context.Context) error {
+			return serve(c, st, ServeOptions{Addr: addr, Hosts: splitList(a.str("host")), NoAuth: noAuth})
+		}, sched, 30*time.Second))
 
 	case "providers":
 		emit(map[string]any{"selected": st.aiSettings().AIProvider, "providers": DetectProviders(true)})
@@ -595,6 +599,28 @@ func check(err error) {
 	if err != nil {
 		fail("error", err)
 	}
+}
+
+// serveWithScheduler lance le planificateur (s'il y en a un) à côté du serveur,
+// puis, quand le serveur rend la main, annule le planificateur et attend sa fin
+// (au plus `wait`) pour ne pas tuer net un passage de publication ou d'écriture.
+func serveWithScheduler(ctx context.Context, serveFn func(context.Context) error, sched func(context.Context), wait time.Duration) error {
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	schedDone := make(chan struct{})
+	if sched != nil {
+		go func() { defer close(schedDone); sched(sctx) }()
+	} else {
+		close(schedDone)
+	}
+	err := serveFn(sctx)
+	cancel()
+	select {
+	case <-schedDone:
+	case <-time.After(wait):
+		fmt.Fprintln(os.Stderr, "xgrowth : le planificateur n'a pas fini à temps, arrêt forcé")
+	}
+	return err
 }
 
 func runScheduler(ctx context.Context, st *Studio, every time.Duration, verbose bool) {
