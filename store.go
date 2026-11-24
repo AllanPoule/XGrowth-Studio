@@ -242,11 +242,12 @@ type Settings struct {
 	WatchSeenAt *time.Time `json:"watchSeenAt,omitempty"`
 
 	// Affiner l'IA, pour tous les comptes.
-	Rules           []string   `json:"rules,omitempty"`     // règles d'écriture communes
-	PostTypes       []PostType `json:"postTypes,omitempty"` // types de posts communs
-	Prompts         AIPrompts  `json:"prompts,omitzero"`    // consignes communes par demande
-	RulesAutoAccept bool       `json:"rulesAutoAccept"`     // applique d'office les règles proposées
-	AutoSynthesis   bool       `json:"autoSynthesis"`       // synthèse hebdomadaire des retours
+	Rules           []string   `json:"rules,omitempty"`          // règles d'écriture communes
+	PostTypes       []PostType `json:"postTypes,omitempty"`      // types de posts communs
+	Prompts         AIPrompts  `json:"prompts,omitzero"`         // consignes communes par demande
+	RulesAutoAccept bool       `json:"rulesAutoAccept"`          // applique d'office les règles proposées
+	AutoSynthesis   bool       `json:"autoSynthesis"`            // synthèse hebdomadaire des retours
+	RuleReviewDays  int        `json:"ruleReviewDays,omitempty"` // échéance de réexamen des règles en place (0 = 90 jours)
 	LastSynthesisAt *time.Time `json:"lastSynthesisAt,omitempty"`
 	// Apprendre des statistiques : analyse hebdomadaire des performances,
 	// désactivée par défaut, et date de la dernière analyse (pour l'affichage ;
@@ -419,7 +420,7 @@ func (s *Store) reload() error {
 	return nil
 }
 
-const dataVersion = 2
+const dataVersion = 3
 
 // migrate met à jour un data.json écrit par une version précédente.
 // Renvoie true si quelque chose a changé.
@@ -444,6 +445,11 @@ func migrate(d *Data) bool {
 				it.Suggestion = SuggestKeep
 			}
 		}
+	}
+	if d.Version < 3 {
+		// v3 : échéance de réexamen et exemples des règles apprises, sans
+		// rien désactiver ni retirer.
+		migrateRules(d)
 	}
 	d.Version = dataVersion
 	return true

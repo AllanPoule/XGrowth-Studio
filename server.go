@@ -112,7 +112,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		// parcourt sans test (un studio sans aucun post plantait à l'affichage).
 		reply(w, map[string]any{
 			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
-			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "perf": perf, "ideas": orEmpty(d.Ideas),
+			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "rulesReview": ComputeRulesReview(d, st.now()), "typeMix": mix, "perf": perf, "ideas": orEmpty(d.Ideas),
 			"feedbackCategories": FeedbackCategories, "mediaLimits": mediaLimitsByAccount(d),
 			"campaigns": orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
 			"commentsDefault": DefaultCommentsPrompt,
@@ -503,6 +503,20 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	// ---- règles apprises (analyse des performances)
 	post("/api/rules/analyze", func(r *http.Request, b map[string]any) (any, error) {
 		return st.AnalyzePerformance(r.Context(), s(b, "account"))
+	})
+	post("/api/rules/merge", func(r *http.Request, b map[string]any) (any, error) {
+		var ids []string
+		if list, ok := b["ids"].([]any); ok {
+			for _, x := range list {
+				if v, ok := x.(string); ok {
+					ids = append(ids, v)
+				}
+			}
+		}
+		return st.MergeRules(ids, s(b, "text"))
+	})
+	post("/api/rules/{id}/review", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SetRuleReview(r.PathValue("id"), n(b, "days", 0))
 	})
 	post("/api/rules/{id}/{decision}", func(r *http.Request, b map[string]any) (any, error) {
 		return st.DecideRule(r.PathValue("id"), r.PathValue("decision"), s(b, "text"))

@@ -616,6 +616,7 @@ func (s *Studio) analyzePerformance(ctx context.Context, account string, auto bo
 				r := &RuleProposal{ID: newID("r"), Account: p.res.Account, Text: text, Rationale: rationale,
 					Source: RuleSourcePerformance, Signals: keys, Evidence: evidence, Basis: strings.Join(basis, " ; "),
 					Status: RuleProposed, CreatedAt: now}
+				r.Examples = ruleExamples(d, r)
 				d.RuleProposals = append(d.RuleProposals, r)
 				p.res.Proposed = append(p.res.Proposed, r)
 			}
