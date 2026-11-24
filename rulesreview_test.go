@@ -226,3 +226,115 @@ func TestRuleCompareIsDescriptive(t *testing.T) {
 		t.Fatalf("mesure absente = indisponible : %+v", c.After)
 	}
 }
+
+// (a) une fusion avec un identifiant en double est refusée sans rien changer.
+func TestMergeRulesDuplicateIDRefused(t *testing.T) {
+	e := newEnv(t)
+	addRules(t, e, accepted("r1", "main", "Reste court.", e.now.AddDate(0, 0, -5)))
+	if _, err := e.st.MergeRules([]string{"r1", "r1"}, ""); err == nil {
+		t.Fatal("un identifiant en double doit être refusé")
+	}
+	if r := e.st.store.Snapshot().RuleProposal("r1"); r.Status != RuleAccepted {
+		t.Fatalf("la règle ne doit pas être retirée : %+v", r)
+	}
+	// une règle seulement proposée ne se fusionne pas
+	addRules(t, e, &RuleProposal{ID: "r_p", Account: "main", Text: "Proposée.", Status: RuleProposed, CreatedAt: e.now})
+	if _, err := e.st.MergeRules([]string{"r1", "r_p"}, ""); err == nil {
+		t.Fatal("une règle non en place ne se fusionne pas")
+	}
+	if r := e.st.store.Snapshot().RuleProposal("r_p"); r.Status != RuleProposed {
+		t.Fatalf("statut inchangé : %+v", r)
+	}
+}
+
+// (b) acceptation d'office : la règle issue de la synthèse reçoit son échéance.
+func TestAutoAcceptedRuleGetsReviewDate(t *testing.T) {
+	e := newEnv(t)
+	_ = e.st.store.Update(func(d *Data) error {
+		d.Settings.RulesAutoAccept = true
+		d.Learnings = append(d.Learnings,
+			Learning{ID: "l_a", Text: "trop long", CreatedAt: e.now, Source: "manual"},
+			Learning{ID: "l_b", Text: "trop long encore", CreatedAt: e.now, Source: "manual"})
+		return nil
+	})
+	if _, err := e.st.Synthesize(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	var r *RuleProposal
+	for _, x := range e.st.store.Snapshot().RuleProposals {
+		if x.Text == "Règle commune" {
+			r = x
+		}
+	}
+	if r == nil || r.Status != RuleAccepted || r.ReviewAt == nil || !r.ReviewAt.Equal(e.now.AddDate(0, 0, defaultRuleReviewDays)) {
+		t.Fatalf("règle acceptée d'office avec échéance à 90 j : %+v", r)
+	}
+}
+
+// (c) (d) SetRuleReview refuse une règle non en place ; retirer efface l'échéance.
+func TestSetRuleReviewGuardsAndRevoke(t *testing.T) {
+	e := newEnv(t)
+	addRules(t, e,
+		&RuleProposal{ID: "r_prop", Text: "Proposée.", Status: RuleProposed, CreatedAt: e.now},
+		accepted("r_rev", "main", "Retirée.", e.now.AddDate(0, 0, -5)),
+		accepted("r_ok", "main", "En place.", e.now.AddDate(0, 0, -5)))
+	if _, err := e.st.DecideRule("r_rev", "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SetRuleReview("r_prop", 10); err == nil {
+		t.Fatal("règle proposée : échéance refusée")
+	}
+	if _, err := e.st.SetRuleReview("r_rev", 10); err == nil {
+		t.Fatal("règle retirée : échéance refusée")
+	}
+	if r, err := e.st.SetRuleReview("r_ok", 10); err != nil || r.ReviewAt == nil {
+		t.Fatalf("échéance posée avant le retrait : %v", err)
+	}
+	if _, err := e.st.DecideRule("r_ok", "revoke", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.st.store.Snapshot().RuleProposal("r_ok"); r.Status != RuleRevoked || r.ReviewAt != nil {
+		t.Fatalf("retirer efface l'échéance : %+v", r)
+	}
+}
+
+// (e) bornes du réglage commun.
+func TestNormalizeSettingsRuleReviewDaysBounds(t *testing.T) {
+	for _, n := range []int{-1, 731} {
+		if err := NormalizeSettings(&Settings{RuleReviewDays: n}); err == nil {
+			t.Fatalf("%d jours doit être refusé", n)
+		}
+	}
+	for _, n := range []int{0, 730} {
+		if err := NormalizeSettings(&Settings{RuleReviewDays: n}); err != nil {
+			t.Fatalf("%d jours doit être accepté : %v", n, err)
+		}
+	}
+}
+
+// (f) une règle propre à un compte ignore les posts des autres comptes ;
+// les jours « après » sont ceux réellement écoulés (au plus 30).
+func TestCompareRuleAccountScopeAndAfterDays(t *testing.T) {
+	e := newEnv(t)
+	at := e.now.AddDate(0, 0, -10)
+	addRules(t, e, accepted("r1", "main", "Reste court.", at))
+	_ = e.st.store.Update(func(d *Data) error {
+		for id, acct := range map[string]string{"mine": "main", "other": "autre"} {
+			w := at.AddDate(0, 0, -3)
+			d.Posts = append(d.Posts, &Post{ID: id, Account: acct, Text: "x", Status: StatusPublished, PublishedAt: &w, TweetID: "t" + id})
+		}
+		return nil
+	})
+	c := ComputeRulesReview(e.st.store.Snapshot(), e.now).Compare["r1"]
+	if c.Before.Posts != 1 {
+		t.Fatalf("seul le post du compte concerné compte : %+v", c.Before)
+	}
+	if c.AfterDays != 10 {
+		t.Fatalf("10 jours écoulés depuis l'acceptation : %d", c.AfterDays)
+	}
+	old := e.now.AddDate(0, 0, -100)
+	addRules(t, e, accepted("r2", "main", "Autre.", old))
+	if c := ComputeRulesReview(e.st.store.Snapshot(), e.now).Compare["r2"]; c.AfterDays != ruleCompareDays {
+		t.Fatalf("plafonné à %d jours : %d", ruleCompareDays, c.AfterDays)
+	}
+}

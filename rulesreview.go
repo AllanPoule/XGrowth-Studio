@@ -223,11 +223,12 @@ type RuleConflict struct {
 
 // RuleCompare : résultats des posts avant et après l'acceptation d'une règle.
 type RuleCompare struct {
-	At     time.Time `json:"at"`
-	Days   int       `json:"days"`
-	Before StatGroup `json:"before"`
-	After  StatGroup `json:"after"`
-	Note   string    `json:"note"`
+	At        time.Time `json:"at"`
+	Days      int       `json:"days"`      // fenêtre avant (et plafond de la fenêtre après)
+	AfterDays int       `json:"afterDays"` // jours réellement couverts depuis l'acceptation (au plus Days)
+	Before    StatGroup `json:"before"`
+	After     StatGroup `json:"after"`
+	Note      string    `json:"note"`
 }
 
 // RulesReview : tout ce que l'interface affiche pour réviser les règles.
@@ -301,7 +302,8 @@ func compareRule(d *Data, r *RuleProposal, now time.Time) (RuleCompare, bool) {
 			after = append(after, statPostOf(d, p))
 		}
 	}
-	return RuleCompare{At: at, Days: ruleCompareDays, Before: groupOf("before", "Avant", before), After: groupOf("after", "Après", after), Note: ruleCompareNote}, true
+	afterDays := int(min(span, max(0, now.Sub(at))) / (24 * time.Hour))
+	return RuleCompare{At: at, Days: ruleCompareDays, AfterDays: afterDays, Before: groupOf("before", "Avant", before), After: groupOf("after", "Après", after), Note: ruleCompareNote}, true
 }
 
 // MergeRules fusionne des doublons que le propriétaire a validés : la première

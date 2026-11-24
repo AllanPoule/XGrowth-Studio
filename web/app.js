@@ -981,10 +981,10 @@ function rulesBlock() {
   const examples = r => (r.examples || []).length ? `<details class="tune"><summary>${r.examples.length} exemple${r.examples.length > 1 ? "s" : ""} qui justifie${r.examples.length > 1 ? "nt" : ""} la règle</summary>${r.examples.map(x => `<div class="hint"><span class="pill">${x.kind === "post" ? "post" : "retour"}</span> ${esc(x.text)}</div>`).join("")}</details>` : "";
   // comparaison descriptive (données de la page Performances), sans conclusion causale
   const grp = g => g.posts ? `${g.posts} post${g.posts > 1 ? "s" : ""}, engagement médian ${g.medianEngagement == null ? "indisponible" : g.medianEngagement.toFixed(2) + " %"}` : "aucun post";
-  const cmp = r => { const c = (rv.compare || {})[r.id]; return c ? `<details class="tune"><summary>Avant / après (${c.days} jours)</summary><div class="hint">Avant le ${esc(fmtDate(c.at, day))} : ${esc(grp(c.before))}<br>Après : ${esc(grp(c.after))}<br>${esc(c.note)}</div></details>` : ""; };
+  const cmp = r => { const c = (rv.compare || {})[r.id]; return c ? `<details class="tune"><summary>Avant / après (${c.days} jours)</summary><div class="hint">Avant le ${esc(fmtDate(c.at, day))} : ${esc(grp(c.before))}<br>Après (${c.afterDays} jour${c.afterDays > 1 ? "s" : ""}) : ${esc(grp(c.after))}<br>${esc(c.note)}</div></details>` : ""; };
   // échéance de réexamen : signalée une fois passée, la règle reste en place
   const review = r => r.status !== "accepted" || !r.reviewAt ? "" : `<div class="hint">${due.has(r.id) ? `<span class="pill warn">À réexaminer</span> échéance du ${esc(fmtDate(r.reviewAt, day))} dépassée, la règle reste en place. ` : `Réexamen le ${esc(fmtDate(r.reviewAt, day))}. `}
-      <input type="number" min="1" max="730" value="${r.reviewDays || S.settings.ruleReviewDays || 90}" data-review-days="${esc(r.id)}" style="width:70px" aria-label="Jours avant réexamen"> j
+      <input type="number" min="1" max="730" value="${r.reviewDays || S.settings.ruleReviewDays || 90}" data-default="${r.reviewDays || S.settings.ruleReviewDays || 90}" data-review-days="${esc(r.id)}" style="width:70px" aria-label="Jours avant réexamen"> j
       <button class="btn sm ghost" data-act="rule-review" data-id="${esc(r.id)}">${due.has(r.id) ? "Réexaminée, la garder" : "Régler"}</button></div>`;
   const row = r => `<tr><td class="small muted" style="width:90px">${scope(r)}</td>
     <td>${r.status === "proposed" ? `<input data-rule="${esc(r.id)}" value="${esc(r.text)}" aria-label="Texte de la règle">` : esc(r.text)}${perf(r)}${r.rationale ? `<div class="hint">${esc(r.rationale)}</div>` : ""}${review(r)}${examples(r)}${r.status === "accepted" ? cmp(r) : ""}</td>
@@ -1004,6 +1004,7 @@ function rulesBlock() {
     <p class="small muted" style="margin-top:0">L'IA relit vos retours (rejets, réécritures, leçons) et les résultats de vos posts publiés, et en tire des règles d'écriture. Une règle en place guide chaque demande ; une règle refusée ou retirée n'est jamais reproposée.</p>
     <div class="row"><label class="toggle"><input type="checkbox" data-setting="rulesAutoAccept" ${S.settings.rulesAutoAccept ? "checked" : ""}><span class="sw"></span>Appliquer d'office les règles proposées</label>
       <label class="toggle"><input type="checkbox" data-setting="autoSynthesis" ${S.settings.autoSynthesis ? "checked" : ""}><span class="sw"></span>Synthèse chaque semaine</label>
+      <label class="small muted" style="display:flex;align-items:center;gap:6px">Réexamen des règles (jours)<input type="number" min="1" max="730" value="${S.settings.ruleReviewDays || 90}" data-setting="ruleReviewDays" style="width:70px"></label>
       <span class="spacer"></span><span class="small muted">${pending} retour${pending > 1 ? "s" : ""} à synthétiser</span>
       <button class="btn sm" data-act="synthesize" ${pending < 2 ? "disabled title=\"2 retours au moins\"" : ""}>${I.spark} Synthétiser maintenant</button></div>
     <div class="row" style="margin-top:8px"><label class="toggle"><input type="checkbox" data-setting="autoPerfAnalysis" ${S.settings.autoPerfAnalysis ? "checked" : ""}><span class="sw"></span>Analyse hebdomadaire des performances</label>
@@ -1062,7 +1063,7 @@ function vSettings(v) {
       ${rulesBlock()}</div>
     <h2>Journal</h2>
     <div class="card" style="padding:6px 8px;max-height:320px;overflow:auto"><table>${(S.log || []).slice().reverse().map(e => `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(e.at, { dateStyle: "short", timeStyle: "short" })}</td><td><span class="pill ${e.level === "error" ? "bad" : ""}">${e.level}</span></td><td class="small">${esc(e.message)}</td></tr>`).join("") || `<tr><td class="muted">Rien pour l'instant.</td></tr>`}</table></div>`;
-  $$("[data-setting]", v).forEach(i => i.onchange = () => run(null, () => api("/api/settings", { [i.dataset.setting]: i.checked }), "Réglage enregistré"));
+  $$("[data-setting]", v).forEach(i => i.onchange = () => run(null, () => api("/api/settings", { [i.dataset.setting]: i.type === "number" ? Number(i.value) : i.checked }), "Réglage enregistré"));
   $$("[data-fb-cat]", v).forEach(sel => sel.onchange = () => run(null, () => api(`/api/learnings/${sel.dataset.fbCat}`, { category: sel.value }), "Catégorie enregistrée"));
   $$("[data-timing-mode]", v).forEach(sel => sel.onchange = () => {
     const card = sel.closest(".card");
@@ -1384,7 +1385,7 @@ const actions = {
   async "perf-analyze"(b) { await run(b, () => api("/api/rules/analyze", {}), perfMsg, { wait: "Analyse…" }) },
   async "rule-accept"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/accept`, { text: $(`[data-rule="${b.dataset.id}"]`)?.value || "" }), "Règle en place") },
   async "rule-refuse"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/refuse`, {}), "Règle refusée") },
-  async "rule-review"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/review`, { days: Number($(`[data-review-days="${b.dataset.id}"]`)?.value) || 0 }), "Échéance enregistrée") },
+  async "rule-review"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/review`, { days: (i => i && i.value !== i.dataset.default ? Number(i.value) || 0 : 0)($(`[data-review-days="${b.dataset.id}"]`)) }), "Échéance enregistrée") },
   async "rule-merge"(b) { if (!confirm("Fusionner ces deux règles ? La seconde sera retirée.")) return; await run(b, () => api("/api/rules/merge", { ids: b.dataset.ids.split(",") }), "Règles fusionnées") },
   async "rule-revoke"(b) { await run(b, () => api(`/api/rules/${b.dataset.id}/revoke`, {}), "Règle retirée") },
   async learn(b) { await run(b, () => api("/api/learnings", { account: $("#la").value, text: $("#lt").value }), "Leçon ajoutée") },

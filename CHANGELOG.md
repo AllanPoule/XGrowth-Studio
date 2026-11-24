@@ -19,12 +19,12 @@ dernière version.
 
 ### Ajouté
 - **Révision des règles apprises** : chaque règle en place a une échéance de réexamen (90 jours par défaut, réglable
-  par règle et dans les réglages, `ruleReviewDays`). Une règle échue est signalée « À réexaminer » mais reste en
+  par règle et, pour toutes, par le champ « Réexamen des règles (jours) » des réglages, `ruleReviewDays`). Une règle échue est signalée « À réexaminer » mais reste en
   place : rien n'est désactivé automatiquement. Les exemples qui justifient une règle (retours, posts) sont copiés
   à la proposition et affichés. Les doublons probables (fusion proposée) et les contradictions possibles sont
   signalés ; la fusion (`POST /api/rules/merge`) n'a lieu qu'au clic et retire la règle absorbée, les
   contradictions ne sont jamais tranchées pour vous (détection par mots, donc approximative). Une comparaison
-  des posts des 30 jours avant et après l'acceptation (données de la page Performances) est affichée comme
+  des posts des 30 jours avant l'acceptation et des jours réellement écoulés depuis (au plus 30, affichés « Après (N jours) ») est affichée comme
   descriptive, sans prétendre prouver un effet ; « indisponible » n'est pas un zéro. Les règles existantes migrent
   sans perte (données en version 3) : échéance calculée depuis leur date d'acceptation, exemples reconstitués
   depuis leurs retours encore présents. Nouvelles routes : `POST /api/rules/{id}/review`, `POST /api/rules/merge` ;
