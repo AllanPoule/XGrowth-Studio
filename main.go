@@ -178,6 +178,15 @@ func main() {
 		emit(map[string]string{"version": version})
 	}
 
+	if cmd == "restore" {
+		src := need(a, 0, "restore <fichier>")
+		saved, err := restoreBackup(homeDir(), src)
+		if err != nil {
+			fail("restore", err)
+		}
+		emit(map[string]string{"restored_from": src, "previous_state": saved})
+	}
+
 	store, err := OpenStore(homeDir())
 	if err != nil {
 		fail("store", err)
@@ -1119,6 +1128,11 @@ const usageText = `xgrowth ` + version + ` — studio de croissance pour X pilot
 Chaque commande imprime une enveloppe JSON ({"ok":...,"data":...}). --pretty pour la lire.
 Données : $XGROWTH_HOME (défaut ~/.xgrowth). IA : Claude Code, Codex, Gemini CLI ou API Claude.
 X : agentx (session navigateur), API X officielle ou dryrun (simulation).
+
+SAUVEGARDES
+  restore <fichier>   remplace data.json par une sauvegarde ($XGROWTH_HOME/backups/data-*.json) après validation ;
+                      l'état courant est copié dans backups/pre-restore-*.json. Arrêter le serveur avant.
+                      Une sauvegarde par jour, XGROWTH_BACKUP_KEEP en garde N (7 par défaut, 0 = aucune).
 
 COMPTES
   account add <nom> [--platform x|linkedin] [--line perso|kinflux|allan-drdrt (LinkedIn, obligatoire)]
