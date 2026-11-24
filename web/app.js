@@ -346,7 +346,7 @@ function tweetCard(p, mode) {
       ${editable ? `<textarea class="tw-edit" data-edit="${p.id}" rows="4">${esc(text)}</textarea>` : `<div class="tw-text">${markPlaceholders(text)}</div>`}
       ${placeholders(text).length ? `<div class="tw-err">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')} ${placeholders(text).length} repère(s) « À COMPLÉTER » à remplacer par du vécu réel avant de valider : ${placeholders(text).map(esc).join(" · ")}</div>` : ""}
       <div class="tw-meta">${editable ? `${ring(n, max)}<span class="cnt ${n > max ? "over" : ""}" data-cnt="${p.id}">${n} / ${max}</span>` : ""}
-        ${p.mediaPath ? `<span class="pill">🖼 ${esc(p.mediaPath.split("/").pop())}</span>` : ""}
+        ${p.mediaFile ? `<span class="pill">🖼 image jointe</span>` : p.mediaPath ? `<span class="pill">🖼 ${esc(p.mediaPath.split("/").pop())}</span>` : ""}
         ${p.validatedBy ? `<span class="pill">${I.shield.replace("<svg", '<svg style="width:12px;height:12px"')} ${esc(p.validatedBy)}</span>` : ""}
         ${li && p.status === "published" ? `<span class="small muted">Statistiques indisponibles</span>` : ""}
         ${p.metrics && !li ? `<span class="small muted">👁 ${nf(p.metrics.views)} · ♥ ${nf(p.metrics.likes)} · ↻ ${nf(p.metrics.retweets)} · ${p.metrics.engagementRatePct.toFixed(1)} %</span>` : ""}
@@ -354,6 +354,7 @@ function tweetCard(p, mode) {
       ${p.rationale && editable ? `<div class="tw-why">${I.bulb}<span>${esc(p.rationale)}</span></div>` : ""}
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${(p.warnings || []).map(w => `<div class="tw-why">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')}<span><b>Avertissement :</b> ${esc(w)}</span></div>`).join("")}
+      ${mode === "edit" && !isHand(p) ? mediaBox(p) : ""}
       ${li && mode === "edit" ? liTools(p) : ""}
       ${editable ? historyHTML(p) : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
@@ -390,6 +391,41 @@ function historyHTML(p) {
 // modifient rien : seul « Appliquer » écrit dans le texte.
 const TIC_SEV = { haute: "bad", moyenne: "warn" };
 const ticsHTML = tics => (tics || []).length ? `<ul class="small" style="margin:6px 0 0 18px">${tics.map(t => `<li><span class="pill ${TIC_SEV[t.severity] || ""}">${esc(t.severity)}</span> ${esc(t.rule)} : « ${esc(t.excerpt)} »</li>`).join("")}</ul>` : `<div class="small muted">Aucun tic repéré.</div>`;
+// ---- visuel : dépôt d'une image depuis le navigateur (glisser-déposer ou sélecteur, y compris sur mobile)
+const MEDIA_ACCEPT = "image/jpeg,image/png,image/gif";
+function mediaLimitsText(l) {
+  if (!l) return "";
+  if (!l.maxImages) return l.note || "Ce compte ne publie pas de visuel.";
+  return `${l.maxImages} image par post · ${l.formats.join(", ")} · ${Math.round(l.maxBytes / 1048576)} Mo au plus${l.maxPixels ? " · moins de 36 millions de pixels" : ""}. ${l.note || ""}`;
+}
+async function uploadMedia(id, file) {
+  const l = (S.mediaLimits || {})[(S.posts.find(x => x.id === id) || {}).account];
+  if (l && l.maxBytes && file.size > l.maxBytes) throw new Error(`Image trop lourde : ${Math.round(l.maxBytes / 1048576)} Mo au plus`);
+  const r = await fetch(`/api/posts/${id}/media-file`, { method: "POST", credentials: "same-origin", headers: { "X-XGrowth": "1", "Content-Type": "application/octet-stream" }, body: file });
+  let e;
+  try { e = await r.json() } catch { throw new Error(r.status === 413 ? "Image trop lourde" : "réponse invalide du serveur (" + r.status + ")") }
+  if (r.status === 401) { boot(); throw new Error("session expirée") }
+  if (!e.ok) throw new Error(e.error?.message || "erreur");
+  return e.data;
+}
+function mediaBox(p) {
+  const a = acct(p.account), l = (S.mediaLimits || {})[p.account], li = a?.platform === "linkedin";
+  const has = p.mediaFile || p.mediaPath;
+  const can = !l || l.maxImages > 0;
+  return `<div class="tw-why media-box" style="display:block">
+    ${has ? `<div class="row" style="align-items:flex-start;gap:12px">
+      ${p.mediaFile ? `<img src="/api/posts/${p.id}/media-file?v=${encodeURIComponent(p.mediaFile)}" alt="${esc(p.mediaAlt || "Aperçu du visuel")}" style="max-width:160px;max-height:160px;border-radius:8px;object-fit:cover">` : ""}
+      <div style="flex:1;min-width:0"><div class="small">${p.mediaFile ? "Image enregistrée sur le serveur (copie stable pour la publication programmée)." : `Chemin serveur (ancien mode) : <code>${esc(p.mediaPath)}</code>`}</div></div>
+    </div>` : ""}
+    ${can ? `<label class="media-drop small muted" data-media-drop="${p.id}" style="display:block;margin-top:8px;padding:12px;border:2px dashed var(--line,#888);border-radius:8px;text-align:center;cursor:pointer">
+      ${I.image} ${has ? "Remplacer l'image : glissez-la ici ou touchez pour choisir" : "Ajouter une image : glissez-la ici ou touchez pour choisir"}
+      <input type="file" accept="${MEDIA_ACCEPT}" data-media-file="${p.id}" style="display:none"></label>` : ""}
+    ${li && has ? `<div class="row" style="margin-top:8px"><input data-alt="${p.id}" value="${esc(p.mediaAlt || "")}" placeholder="Texte alternatif (120 caractères conseillés)" style="flex:1;width:auto"><button class="btn sm" data-act="media-alt" data-id="${p.id}">Enregistrer le texte</button></div>` : ""}
+    ${has ? `<div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="media-remove" data-id="${p.id}">Retirer l'image</button></div>` : ""}
+    <div class="small muted" style="margin-top:6px">${esc(mediaLimitsText(l))}</div>
+    ${p.visualBrief && !has && can ? `<div class="small muted" style="margin-top:6px">Un visuel est proposé mais aucune image n'est associée : le post partira sans image si vous validez.</div>` : ""}
+  </div>`;
+}
 function liTools(p) {
   return `<div class="tw-why" style="display:block">
     <div class="row"><label class="small muted">Ligne</label><select data-line="${p.id}" style="width:auto">${LINES.map(l => `<option ${p.line === l ? "selected" : ""}>${l}</option>`).join("")}</select>
@@ -398,10 +434,6 @@ function liTools(p) {
       <button class="btn sm ghost" data-act="li-humanize" data-id="${p.id}">Humanizer</button>
       <button class="btn sm ghost" data-act="li-audit" data-id="${p.id}">Audit</button>
       <button class="btn sm ghost" data-act="li-tics" data-id="${p.id}">Contrôle anti-tics</button></div>
-    <div class="row" style="margin-top:8px"><input data-media="${p.id}" value="${esc(p.mediaPath || "")}" placeholder="Visuel : chemin du fichier sur le serveur (JPG, PNG, GIF, 10 Mo)" style="flex:1;width:auto">
-      <input data-alt="${p.id}" value="${esc(p.mediaAlt || "")}" placeholder="Texte alternatif (120 caractères conseillés)" style="flex:1;width:auto">
-      <button class="btn sm" data-act="li-media" data-id="${p.id}">${I.image} Enregistrer le visuel</button></div>
-    ${p.visualBrief && !p.mediaPath ? `<div class="small muted" style="margin-top:6px">Un visuel est proposé mais aucune image n'est associée : le post partira sans image si vous validez.</div>` : ""}
     ${p.ticCheckedAt ? `<div style="margin-top:6px"><span class="small muted">Dernier contrôle anti-tics :</span>${ticsHTML(p.tics)}</div>` : ""}
     <div data-li-out="${p.id}" style="margin-top:8px"></div></div>`;
 }
@@ -640,7 +672,7 @@ function vCompose(v) {
       <button class="btn" data-act="mk-reply">${I.reply} Réponse</button><button class="btn" data-act="mk-quote">${I.quote} Citation</button></div></div>
     <h2>Écrire soi-même</h2>
     <div class="card"><textarea id="manual" placeholder="Votre post…"></textarea>
-      <div class="row" style="margin-top:10px"><input id="media" placeholder="Visuel (chemin sur le serveur, facultatif)" style="flex:1;width:auto"><button class="btn" data-act="manual">Ajouter aux brouillons</button></div></div>`;
+      <div class="row" style="margin-top:10px"><label class="small muted" style="flex:1">${I.image} Visuel (facultatif) <input id="media" type="file" accept="${MEDIA_ACCEPT}"></label><button class="btn" data-act="manual">Ajouter aux brouillons</button></div></div>`;
   bindComposer(v, "compose");
 }
 
@@ -1151,9 +1183,12 @@ const actions = {
     const r = await run(b, () => api(`/api/posts/${id}/tics`, {}), null, { noReload: true });
     out.innerHTML = ticsHTML(r.tics);
   },
-  async "li-media"(b) {
-    const id = b.dataset.id, path = $(`[data-media="${id}"]`).value.trim(), alt = $(`[data-alt="${id}"]`).value.trim();
-    await run(b, () => api(`/api/posts/${id}/media`, { path, alt }), "Visuel enregistré");
+  async "media-alt"(b) {
+    const id = b.dataset.id, alt = $(`[data-alt="${id}"]`).value.trim();
+    await run(b, () => api(`/api/posts/${id}/media`, { alt }), "Texte alternatif enregistré");
+  },
+  async "media-remove"(b) {
+    await run(b, () => api(`/api/posts/${b.dataset.id}/media`, { path: "" }), "Image retirée");
   },
   async "plan-week"(b) { await run(b, () => api(`/api/accounts/${encodeURIComponent(b.dataset.name)}/plan-week`, {}), r => `${r.length} idée(s) proposée(s) : à retrouver dans la banque d'idées (aucun post créé)`, { wait: "Plan…" }) },
   async "add-linkedin"(b) {
@@ -1180,7 +1215,16 @@ const actions = {
   async week(b) { const d = +b.dataset.d; store.set("weekOff", d === 0 ? 0 : +store.get("weekOff", 0) + d); render() },
   async "mk-reply"(b) { await mkReply(b, false) },
   async "mk-quote"(b) { await mkReply(b, true) },
-  async manual(b) { await run(b, () => api("/api/write", { account: curAcc(), text: $("#manual").value, media: $("#media").value }), "Ajouté à la file") },
+  async manual(b) {
+    const file = $("#media").files[0];
+    await run(b, async () => {
+      const p = await api("/api/write", { account: curAcc(), text: $("#manual").value });
+      if (file) {
+        try { await uploadMedia(p.id, file) } catch (e) { toast("Brouillon ajouté, mais l'image est refusée : " + e.message, true) }
+      }
+      return p;
+    }, "Ajouté à la file");
+  },
   async fetch(b) { await run(b, () => api("/api/fetch", {}), r => r.length ? r.map(x => x.error ? `${x.source} : ${x.error}` : `${x.source.replace("watch:", "")} +${x.added}`).join(" · ") : "Aucune cible suivie", { wait: "Lecture…" }) },
   async bookmarks(b) { await run(b, () => api("/api/bookmarks", { account: $("#wacc").value, n: 20 }), r => `${r.added} signet(s) importé(s)`) },
   async triage(b) { await run(b, () => api("/api/triage", { account: $("#wacc").value }), r => r.map(x => x.error || (x.triaged ? `${x.triaged} contenu(s) noté(s), ${x.kept} suggéré(s)` : "Tout est déjà noté")).join(" · ") || "Rien à trier", { wait: "Tri…" }) },
@@ -1346,9 +1390,22 @@ function aiTestResult(r) {
     : `<div class="tw-err" style="margin-top:12px">${esc(r.error)}</div>`;
 }
 
+async function dropMedia(id, file) {
+  if (!file) return;
+  try { await run(null, () => uploadMedia(id, file), "Image enregistrée : validation remise à zéro") } catch {}
+}
+document.addEventListener("dragover", e => { if (e.target.closest?.("[data-media-drop]") && e.dataTransfer?.types?.includes("Files")) e.preventDefault() });
+document.addEventListener("drop", e => {
+  const z = e.target.closest?.("[data-media-drop]");
+  if (!z || !e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  dropMedia(z.dataset.mediaDrop, e.dataTransfer.files[0]);
+});
 document.addEventListener("change", async e => {
   const cx = e.target.closest("[data-ctx]");
   if (cx) { store.set("acc", cx.value); render(); return }
+  const mf = e.target.closest("[data-media-file]");
+  if (mf) { const f = mf.files[0]; mf.value = ""; dropMedia(mf.dataset.mediaFile, f); return }
   const sel = e.target.closest("[data-line]");
   if (sel) { try { await run(null, () => api(`/api/posts/${sel.dataset.line}/line`, { line: sel.value }), "Ligne changée : validation remise à zéro") } catch {} return }
   const lf = e.target.closest("[data-line-filter]");
