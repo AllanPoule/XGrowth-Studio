@@ -260,7 +260,7 @@ func TestAuthCopyKeepsNewerSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(a.src, []byte("v2"), 0o600) // renouvelé ailleurs pendant l'appel
-	a.syncBack()                            // la copie vaut toujours v1
+	a.syncBack()                             // la copie vaut toujours v1
 	if b, _ := os.ReadFile(a.src); string(b) != "v2" {
 		t.Errorf("la source plus récente a été écrasée : %q", b)
 	}
