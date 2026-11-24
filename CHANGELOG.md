@@ -6,6 +6,43 @@ dernière version.
 
 ## Non publié
 
+### Sécurité
+- **Isolation des CLI d'IA (Codex, Gemini, Claude Code)** : Codex reçoit un `CODEX_HOME` temporaire avec un
+  `config.toml` sans shell, sans MCP (et les mêmes réglages en `-c`), `web_search` désactivé, sandbox lecture seule,
+  règles utilisateur ignorées (Codex 0.171.0 garde cependant des outils internes sans effet réel : `exec` isolé,
+  `request_user_input`, `sleep`, collaboration ; voir le README) ; Gemini reçoit un `GEMINI_CLI_HOME` temporaire avec une politique qui refuse tous les
+  outils (aussi via `--admin-policy`) et aucun MCP. Les trois CLI tournent avec un environnement en liste blanche
+  (plus aucune clé ni jeton hors connexion propre à la CLI) dans un répertoire de travail vide. Tests sur les
+  arguments, l'environnement et la configuration, dont un contenu de veille malveillant. README aligné sur la
+  protection réelle et ses limites (Gemini non exécuté pour valider la politique). Les identifiants copiés ne sont
+  recopiés que si la source n'a pas changé pendant l'appel ; les variables Vertex AI de Gemini (hors chemin de clés) sont transmises.
+
+### Ajouté
+- **Visuels déposés depuis le navigateur** : on glisse ou on choisit une image (le sélecteur marche sur mobile), avec
+  aperçu, texte alternatif (LinkedIn), remplacement et retrait, au lieu de saisir un chemin de fichier du serveur.
+  Le serveur contrôle le contenu réel (en-tête de l'image et type MIME détecté, pas l'extension), la taille et les
+  formats (JPG, PNG, GIF ; 5 Mo sur X, 10 Mo sur LinkedIn ; une image par post), n'accepte aucun chemin ni nom de
+  fichier du client, et garde une copie stable dans `<données>/media` sous un nom aléatoire (permissions 0600) : la
+  publication programmée l'utilise. Les copies qu'aucun post ne référence plus sont supprimées (au remplacement, au
+  retrait, puis par le nettoyage horaire des fichiers vieux de plus d'une heure). L'interface affiche ce que permet
+  le backend du compte (`mediaLimits` dans `/api/state`) ; le backend xapi n'envoie pas de visuel et le dit.
+  Nouvelle route : `POST/GET /api/posts/{id}/media-file`. Les posts qui portent un ancien chemin serveur continuent
+  de fonctionner (`/api/posts/{id}/media` avec `path` reste disponible).
+
+### Ajouté
+- **Compte actif, partout** : un sélecteur de compte (barre latérale, en-tête sur mobile) mémorisé dans le navigateur.
+  Accueil, À valider, Veille, Performances, Commentaires et Réponses ne montrent que le compte choisi, ou
+  « Tous les comptes ». Créer et Calendrier travaillent toujours sur un seul compte.
+- **Déplacer sans souris** : sur le calendrier, boutons ‹ › (et flèches gauche/droite sur un post sélectionné)
+  pour changer de jour, boutons ↑ ↓ (et flèches haut/bas) pour changer l'ordre dans la file. Le glisser-déposer reste.
+- Tests : `web/tz.test.js` (lancé par `make test` si Node est présent) et tests Go sur les changements d'heure.
+
+### Corrigé
+- **Calendrier dans le fuseau du compte** : les jours et les heures étaient calculés avec le fuseau du navigateur
+  alors que le serveur programme dans celui du compte. Le fuseau du compte (et celui du navigateur s'il diffère)
+  est affiché au-dessus de la semaine.
+- **Semaine du lundi au dimanche** : elle commençait au jour courant.
+
 ### Corrigé
 - **Brouillons, enregistrement sûr** : « Enregistrer » sans modification n'envoie plus rien (il envoyait une chaîne
   vide qui effaçait le texte). Le serveur refuse un texte vide sur un brouillon non vide, sauf effacement explicite

@@ -546,6 +546,7 @@ func (s *Studio) RestorePost(id string, index int) (*Post, error) {
 // au plus, moins de 36 152 320 pixels. Le texte alternatif est gardé.
 func (s *Studio) SetMedia(id, path string) (*Post, error) {
 	var out *Post
+	var old string
 	err := s.store.Update(func(d *Data) error {
 		p := d.Post(id)
 		if p == nil {
@@ -562,7 +563,9 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 				return err
 			}
 		}
+		old = p.MediaFile
 		p.MediaPath = path
+		p.MediaFile = "" // un chemin (ancien mode) ou le retrait remplace l'image déposée
 		if path == "" {
 			p.MediaAlt = ""
 		}
@@ -570,6 +573,9 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 		out = p
 		return nil
 	})
+	if err == nil {
+		s.dropMediaFile(old)
+	}
 	return out, err
 }
 
@@ -596,7 +602,7 @@ func (s *Studio) SetMediaAlt(id, alt string) (*Post, error) {
 		if handOnly(d.Account(p.Account), p) {
 			return errors.New("une réponse ou un commentaire LinkedIn n'a pas de visuel")
 		}
-		if alt != "" && p.MediaPath == "" {
+		if alt != "" && !hasMedia(p) {
 			return errors.New("ce post n'a pas d'image : ajoutez le visuel avant son texte alternatif")
 		}
 		p.MediaAlt = alt
@@ -817,7 +823,7 @@ func (s *Studio) ValidateWith(id, by string, at *time.Time, now bool, opts Valid
 				return fmt.Errorf("validation refusée : tics d'IA à corriger, ou à accepter explicitement (« je garde ces formulations ») : %s", ticSummary(hi))
 			}
 			p.TicsAcknowledged = len(hi) > 0
-			if p.VisualBrief != "" && p.MediaPath == "" {
+			if p.VisualBrief != "" && !hasMedia(p) {
 				p.Warnings = append(p.Warnings, "un visuel est proposé mais aucune image n'est associée : le post partira sans image")
 			}
 		}
@@ -986,7 +992,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			_, err = be.Me(ctx)
 		}
 		if err == nil {
-			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath, MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
+			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: s.mediaSource(&post), MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
 		}
 		r := PublishResult{PostID: id, Account: acct.Name}
 		_ = s.store.Update(func(d *Data) error {
@@ -1364,6 +1370,9 @@ func (s *Studio) TickPublish(ctx context.Context) map[string]any {
 	if n := s.LinkedInExpiryWatch(); n > 0 {
 		out["linkedinAlerts"] = n
 	}
+	if n := s.CleanMedia(); n > 0 {
+		out["mediaCleaned"] = n
+	}
 	return out
 }
 
@@ -1424,3 +1433,6 @@ func (s *Studio) TickAI(ctx context.Context) map[string]any {
 	}
 	return out
 }
+
+// hasMedia : le post a une image, déposée (copie stable) ou par chemin serveur (ancien mode).
+func hasMedia(p *Post) bool { return p.MediaPath != "" || p.MediaFile != "" }

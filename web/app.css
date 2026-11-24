@@ -279,3 +279,14 @@ mark.ph{background:var(--warnbg);color:var(--warn);border-radius:4px;padding:0 3
 /* historique d'un brouillon : comparaison entre versions */
 .tw-why ins{background:rgba(46,160,67,.18);text-decoration:none;border-radius:2px}
 .tw-why del{background:rgba(248,81,73,.18);border-radius:2px}
+
+/* contexte de compte, déplacement au clavier */
+.ctxbox{display:flex;flex-direction:column;gap:4px;padding:0 4px 8px}
+.ctxbox label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.ctxsel{width:100%;max-width:100%}
+.mtop .ctxsel{width:auto;max-width:42vw}
+.tzlabel{color:var(--muted)}
+.ev:focus-visible,.qrow:focus-visible{outline:2px solid var(--a1);outline-offset:2px}
+.evmv{display:flex;gap:4px;justify-content:flex-end;margin-top:4px}
+.evmv .btn{padding:2px 8px;min-height:28px}
+.qmv{display:flex;gap:6px;justify-content:flex-end;margin:-4px 0 10px}

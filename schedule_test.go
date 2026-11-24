@@ -156,3 +156,66 @@ func TestAPIScheduleDragAndDrop(t *testing.T) {
 		t.Fatal("jour passé accepté")
 	}
 }
+
+// Le serveur programme dans le fuseau du compte, jamais dans celui de la machine ni du navigateur :
+// un créneau 09:00 d'un compte parisien reste 09:00 à Paris avant et après chaque changement d'heure.
+func TestMoveToDayFollowsTheAccountTimezoneAcrossDST(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("autre", -5*3600) // machine dans un autre fuseau que le compte
+	defer func() { time.Local = saved }()
+	paris, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skip("base des fuseaux indisponible")
+	}
+	cases := []struct {
+		now time.Time
+		day string
+		utc time.Time
+	}{
+		{time.Date(2026, 3, 25, 8, 0, 0, 0, time.UTC), "2026-03-28", time.Date(2026, 3, 28, 8, 0, 0, 0, time.UTC)}, // UTC+1
+		{time.Date(2026, 3, 25, 8, 0, 0, 0, time.UTC), "2026-03-29", time.Date(2026, 3, 29, 7, 0, 0, 0, time.UTC)}, // jour du passage à l'été : UTC+2
+		{time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC), "2026-10-24", time.Date(2026, 10, 24, 7, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC), "2026-10-25", time.Date(2026, 10, 25, 8, 0, 0, 0, time.UTC)}, // retour à l'hiver : UTC+1
+	}
+	for _, c := range cases {
+		e := newEnv(t)
+		e.now = c.now
+		if err := e.st.SaveAccount(&Account{Name: "paris", Handle: "@paris", Backend: "dryrun", Timezone: "Europe/Paris", Slots: []string{"09:00"}, DailyLimit: 2}); err != nil {
+			t.Fatal(err)
+		}
+		d, err := e.st.AddDraft("paris", "bonjour", "", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.st.Validate(d.ID, "Allan", nil, false); err != nil {
+			t.Fatal(err)
+		}
+		p, err := e.st.MoveToDay(d.ID, c.day)
+		if err != nil {
+			t.Fatalf("%s : %v", c.day, err)
+		}
+		if !p.ScheduledAt.Equal(c.utc) {
+			t.Errorf("%s : %v, attendu %v", c.day, p.ScheduledAt.UTC(), c.utc)
+		}
+		if got := p.ScheduledAt.In(paris).Format("2006-01-02 15:04"); got != c.day+" 09:00" {
+			t.Errorf("%s : heure locale du compte %s", c.day, got)
+		}
+	}
+}
+
+// La semaine du compte commence le lundi, à minuit dans son fuseau, y compris quand elle contient un changement d'heure.
+func TestWeekStartIsMondayAcrossDST(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skip("base des fuseaux indisponible")
+	}
+	for _, c := range []struct{ in, want time.Time }{
+		{time.Date(2026, 3, 29, 12, 0, 0, 0, loc), time.Date(2026, 3, 23, 0, 0, 0, 0, loc)},         // dimanche du passage à l'été
+		{time.Date(2026, 10, 25, 12, 0, 0, 0, loc), time.Date(2026, 10, 19, 0, 0, 0, 0, loc)},       // dimanche du retour à l'hiver
+		{time.Date(2026, 10, 25, 23, 30, 0, 0, time.UTC), time.Date(2026, 10, 26, 0, 0, 0, 0, loc)}, // lundi 00:30 à Paris, encore dimanche en UTC
+	} {
+		if got := weekStart(c.in, loc); !got.Equal(c.want) {
+			t.Errorf("weekStart(%v) = %v, attendu %v", c.in, got, c.want)
+		}
+	}
+}
