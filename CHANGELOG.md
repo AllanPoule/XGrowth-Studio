@@ -18,6 +18,17 @@ dernière version.
   recopiés que si la source n'a pas changé pendant l'appel ; les variables Vertex AI de Gemini (hors chemin de clés) sont transmises.
 
 ### Ajouté
+- **Révision des règles apprises** : chaque règle en place a une échéance de réexamen (90 jours par défaut, réglable
+  par règle et, pour toutes, par le champ « Réexamen des règles (jours) » des réglages, `ruleReviewDays`). Une règle échue est signalée « À réexaminer » mais reste en
+  place : rien n'est désactivé automatiquement. Les exemples qui justifient une règle (retours, posts) sont copiés
+  à la proposition et affichés. Les doublons probables (fusion proposée) et les contradictions possibles sont
+  signalés ; la fusion (`POST /api/rules/merge`) n'a lieu qu'au clic et retire la règle absorbée, les
+  contradictions ne sont jamais tranchées pour vous (détection par mots, donc approximative). Une comparaison
+  des posts des 30 jours avant l'acceptation et des jours réellement écoulés depuis (au plus 30, affichés « Après (N jours) ») est affichée comme
+  descriptive, sans prétendre prouver un effet ; « indisponible » n'est pas un zéro. Les règles existantes migrent
+  sans perte (données en version 3) : échéance calculée depuis leur date d'acceptation, exemples reconstitués
+  depuis leurs retours encore présents. Nouvelles routes : `POST /api/rules/{id}/review`, `POST /api/rules/merge` ;
+  `xgrowth rules review`.
 - **Boîte de réception communautaire X** (onglet « Réponses reçues », pastille du nombre de réponses à traiter) :
   suivre les personnes qui réagissent déjà aux posts publiés du compte.
   - **Récupération plafonnée** : désactivée par défaut, activée par compte. Fréquence réglable (15 minutes au moins,

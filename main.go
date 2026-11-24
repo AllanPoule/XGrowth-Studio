@@ -913,6 +913,8 @@ func cmdRules(ctx context.Context, st *Studio, a args) {
 	case "", "list":
 		d := st.store.Snapshot()
 		emit(map[string]any{"common": d.Settings.Rules, "learned": sortedRules(d.RuleProposals)})
+	case "review":
+		emit(ComputeRulesReview(st.store.Snapshot(), st.now()))
 	case "synthesize":
 		r, err := st.Synthesize(ctx, a.str("account"))
 		check(err)
@@ -926,7 +928,7 @@ func cmdRules(ctx context.Context, st *Studio, a args) {
 		check(err)
 		emit(r)
 	default:
-		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|synthesize|analyze|accept|refuse|revoke"))
+		fail("invalid_input", fmt.Errorf("usage : xgrowth rules list|review|synthesize|analyze|accept|refuse|revoke"))
 	}
 }
 

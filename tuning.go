@@ -371,6 +371,12 @@ type RuleProposal struct {
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"createdAt"`
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
+	// Révision : échéance de réexamen d'une règle en place (signalée une fois
+	// passée, sans jamais désactiver la règle), intervalle propre à la règle
+	// (0 = réglage commun) et exemples copiés qui la justifient.
+	ReviewAt   *time.Time    `json:"reviewAt,omitempty"`
+	ReviewDays int           `json:"reviewDays,omitempty"`
+	Examples   []RuleExample `json:"examples,omitempty"`
 }
 
 func (d *Data) RuleProposal(id string) *RuleProposal {
@@ -493,8 +499,10 @@ func (s *Studio) Synthesize(ctx context.Context, account string) (*SynthesisResu
 					}
 				}
 			}
+			r.Examples = ruleExamples(d, r)
 			if d.Settings.RulesAutoAccept {
 				r.Status, r.DecidedAt = RuleAccepted, &now
+				setRuleReview(d, r, now)
 			}
 			d.RuleProposals = append(d.RuleProposals, r)
 			res.Proposed = append(res.Proposed, r)
@@ -600,6 +608,7 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 				r.Text = t
 			}
 			r.Status = RuleAccepted
+			setRuleReview(d, r, now)
 		case "refuse":
 			if r.Status != RuleProposed {
 				return errors.New("seule une règle proposée peut être refusée")
@@ -609,7 +618,7 @@ func (s *Studio) DecideRule(id, decision, text string) (*RuleProposal, error) {
 			if r.Status != RuleAccepted {
 				return errors.New("seule une règle en place peut être retirée")
 			}
-			r.Status = RuleRevoked
+			r.Status, r.ReviewAt = RuleRevoked, nil
 		default:
 			return fmt.Errorf("décision %q inconnue : accept, refuse ou revoke", decision)
 		}
@@ -695,6 +704,9 @@ func NormalizeSettings(st *Settings) error {
 		rules = append(rules, SplitLines(r)...)
 	}
 	st.Rules = rules
+	if st.RuleReviewDays < 0 || st.RuleReviewDays > maxRuleReviewDays {
+		return fmt.Errorf("échéance de réexamen des règles : 1 à %d jours (0 = %d)", maxRuleReviewDays, defaultRuleReviewDays)
+	}
 	types, err := NormalizePostTypes(st.PostTypes)
 	if err != nil {
 		return err
