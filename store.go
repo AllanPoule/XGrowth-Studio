@@ -141,6 +141,7 @@ type Post struct {
 	AIText      string     `json:"aiText,omitempty"`      // dernier texte écrit par l'IA (pour apprendre des corrections)
 	IdeaID      string     `json:"ideaId,omitempty"`      // idée de la banque dont le post est tiré
 	History     []Revision `json:"history,omitempty"`
+	Version     int        `json:"version,omitempty"` // +1 à chaque changement du texte : sert à refuser une écriture périmée
 	Metrics     *Metrics   `json:"metrics,omitempty"`
 
 	// LinkedIn : contrôle anti-tics d'IA, obligatoire avant la validation. Il
@@ -423,15 +424,15 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := writeFileDurable(s.path, b); err != nil {
 		return err
 	}
 	if st, err := os.Stat(s.path); err == nil {
 		s.modTime = st.ModTime()
+	}
+	// sauvegarde du jour : un échec n'invalide pas l'écriture principale
+	if err := backupIfDue(filepath.Dir(s.path), time.Now()); err != nil {
+		fmt.Fprintln(os.Stderr, "xgrowth : sauvegarde impossible :", err)
 	}
 	return nil
 }

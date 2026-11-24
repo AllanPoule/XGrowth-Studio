@@ -448,7 +448,24 @@ func resetTicCheck(p *Post) {
 	p.TicCheckedHash, p.TicCheckedAt, p.Tics = "", nil, nil
 }
 
+// ErrStale : l'écriture repose sur une version du post qui n'est plus la courante.
+var ErrStale = errors.New("le texte a changé entre-temps : rechargez le brouillon avant d'enregistrer")
+
+// EditPost enregistre un texte. Un texte vide n'écrase jamais un brouillon non
+// vide (voir EditPostOpts pour l'effacement explicite).
 func (s *Studio) EditPost(id, text string) (*Post, error) {
+	return s.EditPostOpts(id, text, EditOptions{})
+}
+
+// EditOptions : ExpectedVersion (nil = pas de contrôle) refuse l'écriture si le
+// post a changé depuis la version lue par le client ; Clear autorise explicitement
+// un texte vide.
+type EditOptions struct {
+	ExpectedVersion *int
+	Clear           bool
+}
+
+func (s *Studio) EditPostOpts(id, text string, o EditOptions) (*Post, error) {
 	var out *Post
 	err := s.store.Update(func(d *Data) error {
 		p := d.Post(id)
@@ -458,8 +475,20 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 		if err := editable(p); err != nil {
 			return err
 		}
+		if o.ExpectedVersion != nil && *o.ExpectedVersion != p.Version {
+			return ErrStale
+		}
+		text = strings.TrimSpace(text)
+		if text == "" && strings.TrimSpace(p.Text) != "" && !o.Clear {
+			return errors.New("texte vide refusé : il écraserait le brouillon (utilisez l'effacement explicite si c'est voulu)")
+		}
+		if text == p.Text {
+			out = p // rien n'a changé : pas de version, pas d'historique
+			return nil
+		}
 		p.History = append(p.History, Revision{Text: p.Text, At: s.now().UTC()})
-		p.Text = strings.TrimSpace(text)
+		p.Text = text
+		p.Version++
 		recordCorrection(d, p, s.now().UTC())
 		resetValidation(p)
 		resetTicCheck(p)
@@ -467,6 +496,41 @@ func (s *Studio) EditPost(id, text string) (*Post, error) {
 			handWarnings(p)
 		}
 		p.UpdatedAt = s.now().UTC()
+		out = p
+		return nil
+	})
+	return out, err
+}
+
+// RestorePost recrée le texte d'une ancienne version (index dans History) comme
+// NOUVELLE version : l'historique n'est jamais réécrit, seulement prolongé.
+func (s *Studio) RestorePost(id string, index int) (*Post, error) {
+	var out *Post
+	err := s.store.Update(func(d *Data) error {
+		p := d.Post(id)
+		if p == nil {
+			return fmt.Errorf("post %q inconnu", id)
+		}
+		if err := editable(p); err != nil {
+			return err
+		}
+		if index < 0 || index >= len(p.History) {
+			return errors.New("version inconnue")
+		}
+		old := p.History[index]
+		if strings.TrimSpace(old.Text) == "" {
+			return errors.New("cette version est vide : rien à restaurer")
+		}
+		now := s.now().UTC()
+		p.History = append(p.History, Revision{Text: p.Text, Feedback: fmt.Sprintf("restauration de la version du %s", old.At.Format("02/01 15:04")), At: now})
+		p.Text = old.Text
+		p.Version++
+		resetValidation(p)
+		resetTicCheck(p)
+		if handOnly(d.Account(p.Account), p) {
+			handWarnings(p)
+		}
+		p.UpdatedAt = now
 		out = p
 		return nil
 	})
@@ -553,6 +617,7 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 	if a == nil {
 		return nil, fmt.Errorf("compte %q inconnu", p.Account)
 	}
+	baseVersion := p.Version
 	o, err := Rewrite(ctx, s.aiFor(a), a, d, p, feedback)
 	if err != nil {
 		return nil, err
@@ -563,7 +628,14 @@ func (s *Studio) RewritePost(ctx context.Context, id, feedback string) (*Post, e
 		if p == nil {
 			return fmt.Errorf("post %q inconnu", id)
 		}
+		if p.Version != baseVersion {
+			return ErrStale // une correction plus récente a eu lieu pendant l'appel IA : on ne l'écrase pas
+		}
+		if err := editable(p); err != nil {
+			return err
+		}
 		p.History = append(p.History, Revision{Text: p.Text, Feedback: feedback, At: s.now().UTC()})
+		p.Version++
 		p.Text, p.Rationale = strings.TrimSpace(o.Text), o.Rationale
 		p.AIText = p.Text
 		resetValidation(p)

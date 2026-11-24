@@ -275,6 +275,21 @@ prêtes. Les brouillons d'actualité attendent la validation, comme le reste.
 ./xgrowth settings --news-quiet 4 --news-max-age 12 --news-per-day 8
 ```
 
+## Sauvegarde et restauration
+
+Les données tiennent dans un seul fichier, `$XGROWTH_HOME/data.json` (nom et emplacement inchangés, mode 0600).
+Chaque écriture est durable : fichier temporaire, `fsync` du fichier, renommage, puis `fsync` du dossier.
+
+- **Sauvegardes tournantes** : une copie horodatée par jour dans `$XGROWTH_HOME/backups/` (`data-AAAAMMJJ-HHMMSS.json`),
+  créée à la première écriture du jour. `XGROWTH_BACKUP_KEEP` règle le nombre de jours gardés (7 par défaut, `0` pour
+  désactiver).
+- **Restauration** : arrêtez le serveur, puis `xgrowth restore ~/.xgrowth/backups/data-20261124-091500.json`. Le fichier
+  est validé (JSON lisible, version de schéma connue) avant tout remplacement ; un fichier corrompu est refusé et
+  `data.json` reste intact. L'état courant est copié dans `backups/pre-restore-*.json` (jamais purgé automatiquement).
+- **Secrets** : `data.json` et les sauvegardes contiennent des secrets (cookies de session, jetons). Elles ont les mêmes
+  permissions (fichiers 0600, dossier 0700) et il n'existe aucun export en clair : ne copiez pas ce dossier hors de la
+  machine sans le chiffrer. `linkedin.json` (jeton LinkedIn) n'est pas inclus dans les sauvegardes.
+
 ## Déploiement privé (NetBird, Tailscale…)
 
 Le studio peut publier sur votre compte : exposez-le uniquement sur un réseau privé. Exemple sur un serveur Linux
