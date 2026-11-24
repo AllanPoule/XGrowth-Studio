@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -108,8 +109,8 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		reply(w, map[string]any{
 			"accounts": orEmpty(d.Accounts), "posts": orEmpty(d.Posts), "items": orEmpty(items), "settings": d.Settings,
 			"learnings": orEmpty(d.Learnings), "rules": orEmpty(sortedRules(d.RuleProposals)), "typeMix": mix, "perf": perf, "ideas": orEmpty(d.Ideas),
-			"feedbackCategories": FeedbackCategories,
-			"campaigns":          orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
+			"feedbackCategories": FeedbackCategories, "mediaLimits": mediaLimitsByAccount(d),
+			"campaigns": orEmpty(d.Campaigns), "candidates": orEmpty(sortedCandidates(d.Candidates, 300)), "campaignStats": campaignStats(d, time.Now()),
 			"commentsDefault": DefaultCommentsPrompt,
 			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes, "linkedin": map[string]any{"maxChars": linkedinMaxChars, "lines": linkedinLines}},
 			"linkedin":        map[string]any{"configured": st.liCfg().configured(), "accounts": st.linkedinStates(d)},
@@ -227,6 +228,34 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			return st.SetMediaAlt(id, s(b, "alt"))
 		}
 		return st.store.Snapshot().Post(id), nil
+	})
+	// Image déposée depuis le navigateur : le corps de la requête EST l'image
+	// (aucun nom ni chemin du client) ; le contenu est vérifié par le serveur.
+	mux.HandleFunc("POST /api/posts/{id}/media-file", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-XGrowth") != "1" {
+			http.Error(w, "en-tête X-XGrowth manquant", http.StatusForbidden)
+			return
+		}
+		p, err := st.AttachMedia(r.PathValue("id"), http.MaxBytesReader(w, r.Body, mediaUploadCeiling+1))
+		reply(w, p, err)
+	})
+	mux.HandleFunc("GET /api/posts/{id}/media-file", func(w http.ResponseWriter, r *http.Request) {
+		path, ext, ok := st.MediaFileOf(r.PathValue("id"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", map[string]string{".jpg": "image/jpeg", ".png": "image/png", ".gif": "image/gif"}[ext])
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		w.Header().Set("Cache-Control", "private, no-cache")
+		_, _ = io.Copy(w, f)
 	})
 	// ---- LinkedIn : méthode (aides sur demande, aucune n'écrit seule) et contrôles
 	post("/api/posts/{id}/tics", func(r *http.Request, b map[string]any) (any, error) {
@@ -557,4 +586,12 @@ func orEmpty[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+func mediaLimitsByAccount(d *Data) map[string]MediaLimits {
+	out := map[string]MediaLimits{}
+	for i := range d.Accounts {
+		out[d.Accounts[i].Name] = mediaLimitsFor(d.Accounts[i])
+	}
+	return out
 }

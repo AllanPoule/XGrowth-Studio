@@ -6,6 +6,18 @@ dernière version.
 
 ## Non publié
 
+### Ajouté
+- **Visuels déposés depuis le navigateur** : on glisse ou on choisit une image (le sélecteur marche sur mobile), avec
+  aperçu, texte alternatif (LinkedIn), remplacement et retrait, au lieu de saisir un chemin de fichier du serveur.
+  Le serveur contrôle le contenu réel (en-tête de l'image et type MIME détecté, pas l'extension), la taille et les
+  formats (JPG, PNG, GIF ; 5 Mo sur X, 10 Mo sur LinkedIn ; une image par post), n'accepte aucun chemin ni nom de
+  fichier du client, et garde une copie stable dans `<données>/media` sous un nom aléatoire (permissions 0600) : la
+  publication programmée l'utilise. Les copies qu'aucun post ne référence plus sont supprimées (au remplacement, au
+  retrait, puis par le nettoyage horaire des fichiers vieux de plus d'une heure). L'interface affiche ce que permet
+  le backend du compte (`mediaLimits` dans `/api/state`) ; le backend xapi n'envoie pas de visuel et le dit.
+  Nouvelle route : `POST/GET /api/posts/{id}/media-file`. Les posts qui portent un ancien chemin serveur continuent
+  de fonctionner (`/api/posts/{id}/media` avec `path` reste disponible).
+
 ### Corrigé
 - **Brouillons, enregistrement sûr** : « Enregistrer » sans modification n'envoie plus rien (il envoyait une chaîne
   vide qui effaçait le texte). Le serveur refuse un texte vide sur un brouillon non vide, sauf effacement explicite

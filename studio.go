@@ -542,6 +542,7 @@ func (s *Studio) RestorePost(id string, index int) (*Post, error) {
 // au plus, moins de 36 152 320 pixels. Le texte alternatif est gardé.
 func (s *Studio) SetMedia(id, path string) (*Post, error) {
 	var out *Post
+	var old string
 	err := s.store.Update(func(d *Data) error {
 		p := d.Post(id)
 		if p == nil {
@@ -558,7 +559,9 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 				return err
 			}
 		}
+		old = p.MediaFile
 		p.MediaPath = path
+		p.MediaFile = "" // un chemin (ancien mode) ou le retrait remplace l'image déposée
 		if path == "" {
 			p.MediaAlt = ""
 		}
@@ -566,6 +569,9 @@ func (s *Studio) SetMedia(id, path string) (*Post, error) {
 		out = p
 		return nil
 	})
+	if err == nil {
+		s.dropMediaFile(old)
+	}
 	return out, err
 }
 
@@ -982,7 +988,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			_, err = be.Me(ctx)
 		}
 		if err == nil {
-			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: post.MediaPath, MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
+			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: s.mediaSource(&post), MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
 		}
 		r := PublishResult{PostID: id, Account: acct.Name}
 		_ = s.store.Update(func(d *Data) error {
@@ -1341,6 +1347,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if n := s.LinkedInExpiryWatch(); n > 0 {
 		out["linkedinAlerts"] = n
+	}
+	if n := s.CleanMedia(); n > 0 {
+		out["mediaCleaned"] = n
 	}
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r

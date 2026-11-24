@@ -122,8 +122,9 @@ type Post struct {
 	TargetText  string     `json:"targetText,omitempty"` // texte du post auquel on répond / qu'on cite
 	TargetURL   string     `json:"targetUrl,omitempty"`  // LinkedIn (réponse/commentaire) : lien collé par Allan, stocké tel quel, jamais ouvert ni appelé
 	HandledAt   *time.Time `json:"handledAt,omitempty"`  // LinkedIn (réponse/commentaire) : date du « traité à la main »
-	MediaPath   string     `json:"mediaPath,omitempty"`
-	MediaAlt    string     `json:"mediaAlt,omitempty"` // LinkedIn : texte alternatif du visuel (4 086 caractères au plus)
+	MediaPath   string     `json:"mediaPath,omitempty"`  // ancien mode : chemin d'un fichier du serveur (les posts existants continuent de marcher)
+	MediaFile   string     `json:"mediaFile,omitempty"`  // image déposée depuis le navigateur : nom de la copie stable dans <données>/media (voir media.go)
+	MediaAlt    string     `json:"mediaAlt,omitempty"`   // LinkedIn : texte alternatif du visuel (4 086 caractères au plus)
 	Rationale   string     `json:"rationale,omitempty"`
 	Status      string     `json:"status"`
 	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
@@ -358,6 +359,9 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	return s, nil
 }
+
+// Dir est le dossier de données de ce studio.
+func (s *Store) Dir() string { return filepath.Dir(s.path) }
 
 func (s *Store) flock(how int) error { return syscall.Flock(int(s.lock.Fd()), how) }
 
