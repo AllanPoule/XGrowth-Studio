@@ -285,10 +285,12 @@ const ROUTES = [
 ];
 // l'onglet « Commentaires » (campagnes de réponses) se place après « Créer »
 ROUTES.splice(3, 0, ["comments", "Commentaires", I.reply]);
+// la boîte de réception (réponses reçues sur les posts X) suit « Commentaires »
+ROUTES.splice(4, 0, ["inbox", "Réponses reçues", I.inbox]);
 // le centre de contrôle des publications se place avant les Réglages
 ROUTES.splice(ROUTES.length - 1, 0, ["control", "Contrôle", I.check]);
 // l'onglet « Réponses » (LinkedIn, brouillons à poster à la main) n'apparaît que s'il y a un compte LinkedIn
-ROUTES.splice(4, 0, ["replies", "Réponses", I.reply]);
+ROUTES.splice(5, 0, ["replies", "Réponses", I.reply]);
 const routesShown = () => ROUTES.filter(x => x[0] !== "replies" || (S.accounts || []).some(a => a.platform === "linkedin"));
 const route = () => (location.hash.replace(/^#\/?/, "") || "home").split("/")[0];
 window.addEventListener("hashchange", () => S && render());
@@ -298,7 +300,8 @@ function counts() {
   const rp = S.posts.filter(p => inCtx(p.account) && p.status === "draft" && isHand(p)).length;
   const w = (S.items || []).filter(i => inCtx(i.account) && i.status === "pending").length;
   const cm = S.posts.filter(p => inCtx(p.account) && (p.status === "draft" || p.status === "failed") && p.campaignId).length;
-  return { queue: q, watch: w, comments: cm, replies: rp, control: S.control?.attention || 0 };
+  const ib = (S.inbox || []).filter(e => inCtx(e.account) && e.status === "todo").length;
+  return { queue: q, watch: w, comments: cm, replies: rp, inbox: ib, control: S.control?.attention || 0 };
 }
 
 function render() {
@@ -327,7 +330,7 @@ function render() {
     </div>
     <nav class="mnav">${routesShown().filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
   </div>`;
-  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments, replies: vReplies, control: vControl };
+  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments, inbox: vInbox, replies: vReplies, control: vControl };
   (views[r] || vHome)($("#view"));
   $("#view").insertAdjacentHTML("afterbegin", liBanner());
 }
@@ -1276,6 +1279,13 @@ const actions = {
     if (!confirm("Ce post ne partira plus par l'API : vous le publierez vous-même sur LinkedIn, puis vous le marquerez comme publié. Continuer ?")) return;
     await run(b, () => api(`/api/posts/${b.dataset.id}/manual`, {}), "À publier à la main");
   },
+  async "inbox-sync"(b) { await run(b, () => api("/api/inbox/sync", { account: b.dataset.name }), r => r.length ? `${r.reduce((n, x) => n + x.new, 0)} nouvelle(s) réponse(s)` : "Rien à relever (boîte désactivée ?)") },
+  async "inbox-status"(b) { await run(b, () => api(`/api/inbox/${b.dataset.id}/status`, { status: b.dataset.status }), "Statut mis à jour") },
+  async "inbox-draft"(b) { await run(b, () => api(`/api/inbox/${b.dataset.id}/draft`, {}), "Brouillon prêt : il attend votre validation dans « À valider »", { wait: " Rédaction" }) },
+  async "inbox-settings"(b) {
+    const n = b.dataset.name, g = id => document.getElementById(id + "-" + n);
+    await run(b, () => api(`/api/accounts/${encodeURIComponent(n)}/inbox`, { enabled: g("ib-on").checked, everyMinutes: +g("ib-every").value, dailyCap: +g("ib-cap").value, windowDays: +g("ib-win").value }), "Réglages enregistrés");
+  },
   async pause(b) {
     const on = b.dataset.paused === "1";
     if (on && !confirm("Mettre ce compte en pause ? Plus rien ne sera publié pour lui tant que vous ne l'aurez pas repris.")) return;
@@ -1721,6 +1731,33 @@ function vReplies(v) {
   $$("#rp-mode button", v).forEach(b => b.onclick = () => { store.set("rmode", b.dataset.m); render() });
   $$("#rf button", v).forEach(b => b.onclick = () => { store.set("rf", b.dataset.f); render() });
   vQueueBind();
+}
+
+function vInbox(v) {
+  const f = store.get("ibf", "todo"), all = (S.inbox || []).filter(e => inCtx(e.account));
+  const lists = { todo: all.filter(e => e.status === "todo"), answered: all.filter(e => e.status === "answered"), ignored: all.filter(e => e.status === "ignored") };
+  const post = id => (S.posts || []).find(p => p.id === id);
+  const accs = (S.inboxState || []).filter(a => inCtx(a.account));
+  const card = e => { const dr = e.draftPostId && post(e.draftPostId);
+    return `<div class="card"><div class="row"><b>@${esc(e.author)}</b>${e.followers ? `<span class="small muted">${nf(e.followers)} abonnés</span>` : ""}<span class="small muted">${e.createdAt ? esc(fmtDate(e.createdAt)) : rel(e.fetchedAt)}</span><span class="spacer"></span><span class="small muted">@${esc(handleOf(e.account))}</span></div>
+      <div class="tw-text" style="margin:8px 0">${esc(e.text)}</div>
+      <details class="small muted"><summary>Votre post d'origine</summary><p style="margin-top:6px">${esc(e.postText)}</p></details>
+      ${dr ? `<p class="small" style="margin-top:8px">${dr.status === "draft" ? "Brouillon prêt, à valider dans « À valider »" : `Réponse : ${esc(dr.status)}`}.</p>` : ""}
+      <div class="row" style="margin-top:8px">
+        ${e.status === "todo" ? `<button class="btn sm primary" data-act="inbox-draft" data-id="${e.id}">${I.spark} ${dr ? "Voir le brouillon" : "Suggérer une réponse"}</button><button class="btn sm" data-act="inbox-status" data-id="${e.id}" data-status="answered">Répondu</button><button class="btn sm" data-act="inbox-status" data-id="${e.id}" data-status="ignored">Ignorer</button>`
+          : `<button class="btn sm" data-act="inbox-status" data-id="${e.id}" data-status="todo">Remettre à traiter</button>`}
+        <a class="small" href="https://x.com/${esc(e.author)}/status/${esc(e.replyId)}" target="_blank" rel="noopener">Voir sur X</a></div></div>`; };
+  v.innerHTML = `<div class="head"><div><h1>Réponses reçues</h1><p>Les personnes qui réagissent déjà à vos posts. Rien n'est envoyé sans votre validation : « Suggérer une réponse » crée un brouillon à valider.</p></div></div>
+    <div class="seg" id="ibf" style="margin:0 0 12px">${[["todo", "À traiter"], ["answered", "Répondu"], ["ignored", "Ignoré"]].map(([k, l]) => `<button data-f="${k}" class="${k === f ? "on" : ""}">${l} (${lists[k].length})</button>`).join("")}</div>
+    ${lists[f].length ? lists[f].map(card).join("") : empty(I.inbox, f === "todo" ? "Aucune réponse à traiter" : "Rien ici pour l'instant", f === "todo" ? "Activez la boîte pour un compte ci-dessous : les réponses à vos posts publiés arrivent à chaque passage." : "")}
+    <h2>Récupération</h2>${accs.map(a => `<div class="card"><div class="row"><b>@${esc(handleOf(a.account))}</b><span class="pill ${a.enabled ? "ok" : ""}">${a.enabled ? "Activée" : "Désactivée"}</span><span class="muted small">${a.readToday}/${a.dailyCap} lectures aujourd'hui${a.lastAt ? ` · dernier passage ${rel(a.lastAt)}` : ""}</span><span class="spacer"></span>${a.enabled ? `<button class="btn sm" data-act="inbox-sync" data-name="${esc(a.account)}">Actualiser</button>` : ""}</div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap"><label><input type="checkbox" id="ib-on-${esc(a.account)}" ${a.enabled ? "checked" : ""}> Activer</label>
+        <label class="small">Toutes les <input id="ib-every-${esc(a.account)}" type="number" min="15" value="${a.everyMinutes}" style="width:70px"> min</label>
+        <label class="small">Plafond <input id="ib-cap-${esc(a.account)}" type="number" min="10" max="1000" value="${a.dailyCap}" style="width:80px"> lectures/jour</label>
+        <label class="small">Posts des <input id="ib-win-${esc(a.account)}" type="number" min="1" max="30" value="${a.windowDays}" style="width:60px"> derniers jours</label>
+        <button class="btn sm" data-act="inbox-settings" data-name="${esc(a.account)}">Enregistrer</button></div>
+      <p class="hint">Avec l'API officielle de X, chaque réponse lue est facturée (0,005 $ au tarif affiché par X) : le plafond borne la dépense (${a.dailyCap} lectures ≈ ${(a.dailyCap * 0.005).toFixed(2)} $ au plus par jour). L'API officielle ne remonte que les réponses des 7 derniers jours (recherche récente). Avec AgentX, aucune facturation par appel.</p></div>`).join("")}`;
+  $$("#ibf button", v).forEach(b => b.onclick = () => { store.set("ibf", b.dataset.f); render() });
 }
 
 function vComments(v) {

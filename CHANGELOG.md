@@ -18,6 +18,19 @@ dernière version.
   recopiés que si la source n'a pas changé pendant l'appel ; les variables Vertex AI de Gemini (hors chemin de clés) sont transmises.
 
 ### Ajouté
+- **Boîte de réception communautaire X** (onglet « Réponses reçues », pastille du nombre de réponses à traiter) :
+  suivre les personnes qui réagissent déjà aux posts publiés du compte.
+  - **Récupération plafonnée** : désactivée par défaut, activée par compte. Fréquence réglable (15 minutes au moins,
+    60 par défaut), plafond de lectures par jour (10 à 1 000, 100 par défaut ; un appel vide ou en échec compte une
+    lecture) et fenêtre de suivi (posts publiés depuis 7 jours par défaut). Elle tourne dans la boucle IA du
+    planificateur, jamais dans celle de la publication. AgentX lit `agentx thread` ; l'API officielle lit
+    `GET /2/tweets/search/recent?query=conversation_id:<post>` (facturée par post lu sur l'offre à l'usage).
+  - **Sans doublon** : une réponse déjà connue (même ignorée ou traitée) n'est jamais réenregistrée ; vos propres
+    réponses sont écartées. Le texte du post d'origine est conservé et affiché avec chaque réponse.
+  - **Statuts** « À traiter », « Répondu » (aussi posé quand le brouillon lié est publié) et « Ignoré ».
+  - **Brouillon sur demande seulement** (« Suggérer une réponse ») : un brouillon ordinaire, à valider comme les
+    autres. Aucun envoi automatique. Routes : `POST /api/inbox/sync`, `/api/inbox/{id}/status`,
+    `/api/inbox/{id}/draft`, `/api/accounts/{nom}/inbox`.
 - **Centre de contrôle des publications** (onglet « Contrôle », pastille du nombre de points à traiter) : une page
   qui répond à « est-ce que tout tourne, et qu'est-ce qui demande mon intervention ? ».
   - **Pause par compte** : le planificateur ne publie rien pour un compte en pause (les posts restent en file, la
