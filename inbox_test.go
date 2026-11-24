@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -62,7 +63,8 @@ func TestInboxNoDuplicate(t *testing.T) {
 	e, x, p := inboxEnv(t, InboxSettings{Enabled: true})
 	own := tw("6000", "moi", "Ma propre réponse")
 	root := tw(p.TweetID, "moi", p.Text)
-	x.replies[p.TweetID] = append([]Tweet{root, own}, manyReplies(0, 3)...)
+	rootOther := tw(p.TweetID, "autre", p.Text) // même id que le post, auteur différent : écarté aussi
+	x.replies[p.TweetID] = append([]Tweet{root, rootOther, own}, manyReplies(0, 3)...)
 	if r := e.st.SyncInbox(ctx, "", false); len(r) != 1 || r[0].New != 3 {
 		t.Fatalf("premier passage : %+v", r)
 	}
@@ -210,6 +212,9 @@ func TestInboxNeverPublishesByItself(t *testing.T) {
 	if len(e.x.posted) != posted {
 		t.Fatal("le brouillon est parti sans validation")
 	}
+	if got := e.st.store.Snapshot().Inbox[0]; got.Status != InboxTodo {
+		t.Fatalf("statut avant publication : %s (« À traiter » attendu)", got.Status)
+	}
 	// l'utilisateur valide : seulement alors la réponse part, puis l'entrée passe à « Répondu »
 	at := e.now.Add(-time.Minute)
 	if _, err := e.st.Validate(dr.ID, "allan", &at, false); err != nil {
@@ -251,5 +256,53 @@ func TestInboxUnsupportedBackend(t *testing.T) {
 	r := e.st.SyncInbox(context.Background(), "", true)
 	if len(r) != 1 || r[0].Error == "" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// blockX : un lecteur de réponses bloqué sur un canal, pour faire se chevaucher deux passages.
+type blockX struct {
+	*fakeX
+	mu      sync.Mutex
+	asked   []int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockX) Replies(_ context.Context, _ string, n int) ([]Tweet, error) {
+	b.mu.Lock()
+	b.asked = append(b.asked, n)
+	b.mu.Unlock()
+	b.entered <- struct{}{}
+	<-b.release
+	return nil, nil
+}
+
+// Deux passages forcés simultanés ne dépassent pas le plafond : le budget est
+// réservé avant l'appel.
+func TestInboxConcurrentSyncRespectsCap(t *testing.T) {
+	ctx := context.Background()
+	e, _, _ := inboxEnv(t, InboxSettings{Enabled: true, DailyCap: 25})
+	b := &blockX{fakeX: e.x, entered: make(chan struct{}, 16), release: make(chan struct{})}
+	e.st.backendFor = func(*Account) (XBackend, error) { return b, nil }
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); e.st.SyncInbox(ctx, "", true) }()
+	}
+	<-b.entered // au moins un appel en vol ; l'autre arrive ou est refusé
+	time.Sleep(50 * time.Millisecond)
+	close(b.release)
+	wg.Wait()
+	b.mu.Lock()
+	sum := 0
+	for _, n := range b.asked {
+		sum += n
+	}
+	b.mu.Unlock()
+	if sum > 25 {
+		t.Fatalf("%d lectures demandées au total, plafond 25 (%v)", sum, b.asked)
+	}
+	if st := inboxStatus(e.st.store.Snapshot(), e.now); st[0].Read > 25 {
+		t.Fatalf("lectures du jour : %d (plafond 25)", st[0].Read)
 	}
 }

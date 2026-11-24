@@ -197,10 +197,6 @@ func (s *Studio) syncInboxAccount(ctx context.Context, d *Data, a *Account, forc
 	if st != nil && !force && !st.LastAt.IsZero() && now.Sub(st.LastAt) < a.Inbox.every() {
 		return r, false
 	}
-	used := 0
-	if st != nil && st.Day == day {
-		used = st.Read
-	}
 	limit := a.Inbox.cap()
 	// le passage est daté AVANT toute lecture : un échec ne relance pas en boucle
 	name := a.Name
@@ -249,14 +245,29 @@ func (s *Studio) syncInboxAccount(ctx context.Context, d *Data, a *Account, forc
 		if r.Posts >= inboxPostsPerPass {
 			break
 		}
-		remaining := limit - used
-		if remaining < inboxMinCap {
+		// réservation atomique du budget AVANT l'appel : deux passages
+		// concurrents ne peuvent pas lire deux fois le même reste.
+		n, capped := 0, false
+		_ = s.store.Update(func(d *Data) error {
+			x := d.inboxState(name)
+			if x.Day != day {
+				x.Day, x.Read = day, 0
+			}
+			remaining := limit - x.Read
+			if remaining < inboxMinCap {
+				capped = true
+				return nil
+			}
+			n = remaining
+			if n > inboxMaxPage {
+				n = inboxMaxPage
+			}
+			x.Read += n
+			return nil
+		})
+		if capped {
 			r.Capped = true
 			break
-		}
-		n := remaining
-		if n > inboxMaxPage {
-			n = inboxMaxPage
 		}
 		pid := p.ID
 		ts, err := rf.Replies(ctx, p.TweetID, n)
@@ -271,7 +282,6 @@ func (s *Studio) syncInboxAccount(ctx context.Context, d *Data, a *Account, forc
 		if charge < 1 {
 			charge = 1
 		}
-		used += charge
 		r.Read += charge
 		if err != nil {
 			r.Error = err.Error()
@@ -283,7 +293,9 @@ func (s *Studio) syncInboxAccount(ctx context.Context, d *Data, a *Account, forc
 				x.PostAt = map[string]time.Time{}
 			}
 			x.PostAt[pid] = now.UTC()
-			x.Day, x.Read = day, used
+			if x.Day == day && n > charge {
+				x.Read -= n - charge // rend la part réservée non consommée
+			}
 			if err == nil {
 				added = d.addInbox(a, p, ts, me, now.UTC())
 			}

@@ -1756,7 +1756,7 @@ function vInbox(v) {
         <label class="small">Plafond <input id="ib-cap-${esc(a.account)}" type="number" min="10" max="1000" value="${a.dailyCap}" style="width:80px"> lectures/jour</label>
         <label class="small">Posts des <input id="ib-win-${esc(a.account)}" type="number" min="1" max="30" value="${a.windowDays}" style="width:60px"> derniers jours</label>
         <button class="btn sm" data-act="inbox-settings" data-name="${esc(a.account)}">Enregistrer</button></div>
-      <p class="hint">Avec l'API officielle de X, chaque réponse lue est facturée (0,005 $ au tarif affiché par X) : le plafond borne la dépense (${a.dailyCap} lectures ≈ ${(a.dailyCap * 0.005).toFixed(2)} $ au plus par jour). Avec AgentX, aucune facturation par appel.</p></div>`).join("")}`;
+      <p class="hint">Avec l'API officielle de X, chaque réponse lue est facturée (0,005 $ au tarif affiché par X) : le plafond borne la dépense (${a.dailyCap} lectures ≈ ${(a.dailyCap * 0.005).toFixed(2)} $ au plus par jour). L'API officielle ne remonte que les réponses des 7 derniers jours (recherche récente). Avec AgentX, aucune facturation par appel.</p></div>`).join("")}`;
   $$("#ibf button", v).forEach(b => b.onclick = () => { store.set("ibf", b.dataset.f); render() });
 }
 
