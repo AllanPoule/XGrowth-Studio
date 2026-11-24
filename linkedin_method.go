@@ -469,6 +469,7 @@ func (s *Studio) ApplyHook(id, hook string) (*Post, error) {
 		now := s.now().UTC()
 		p.History = append(p.History, Revision{Text: p.Text, Feedback: "accroche appliquée", At: now})
 		p.Text = strings.TrimSpace(hook + p.Text[end:])
+		p.Version++
 		resetValidation(p)
 		resetTicCheck(p)
 		p.UpdatedAt = now
@@ -530,6 +531,7 @@ func (s *Studio) ApplyHumanized(id, text string) (*Post, error) {
 		now := s.now().UTC()
 		p.History = append(p.History, Revision{Text: p.Text, Feedback: "humanizer appliqué", At: now})
 		p.Text = text
+		p.Version++
 		resetValidation(p)
 		resetTicCheck(p)
 		p.UpdatedAt = now
