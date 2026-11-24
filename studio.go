@@ -26,6 +26,10 @@ type Studio struct {
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
+	// loopSt : état des boucles du planificateur (loops.go)
+	loopSt loopState
+	// aiCallTimeout : délai d'un appel IA du planificateur (0 = défaut)
+	aiCallTimeout time.Duration
 }
 
 func NewStudio(store *Store) *Studio {
@@ -1339,9 +1343,27 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 	return updated, lastErr
 }
 
-// Tick est un passage du planificateur : publication, veille, tri, statistiques.
+// Tick est un passage complet (publication puis traitements IA), pour la
+// ligne de commande et les tests. Le planificateur, lui, lance les deux
+// moitiés dans des boucles séparées (runSchedulerLoops).
 func (s *Studio) Tick(ctx context.Context) map[string]any {
+	out := s.TickPublish(ctx)
+	for k, v := range s.TickAI(ctx) {
+		if k != "at" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// TickPublish : la publication et ce qui doit partir à l'heure, sans aucun
+// appel IA. Saute le passage si le précédent tourne encore.
+func (s *Studio) TickPublish(ctx context.Context) map[string]any {
 	out := map[string]any{"at": s.now().UTC()}
+	if !s.beginLoop(schedulerLoopPublish) {
+		return out
+	}
+	defer s.endLoop(schedulerLoopPublish)
 	if r := s.PublishDue(ctx); len(r) > 0 {
 		out["published"] = r
 	}
@@ -1351,6 +1373,19 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	if n := s.CleanMedia(); n > 0 {
 		out["mediaCleaned"] = n
 	}
+	return out
+}
+
+// TickAI : veille, tri, actualités, statistiques, campagnes, synthèse,
+// analyse. Chaque appel IA est borné (délai, concurrence). Saute le passage
+// si le précédent tourne encore.
+func (s *Studio) TickAI(ctx context.Context) map[string]any {
+	out := map[string]any{"at": s.now().UTC()}
+	if !s.beginLoop(schedulerLoopAI) {
+		return out
+	}
+	defer s.endLoop(schedulerLoopAI)
+	ctx = schedulerCtx(ctx)
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r
 	}
