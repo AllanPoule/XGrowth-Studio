@@ -26,9 +26,13 @@ type Studio struct {
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
-	// every : intervalle du planificateur (renseigné par runScheduler), pour
-	// savoir quand un passage est trop ancien
+	// every : intervalle du planificateur (renseigné par runSchedulerLoops),
+	// pour savoir quand un passage est trop ancien
 	every time.Duration
+	// loopSt : état des boucles du planificateur (loops.go)
+	loopSt loopState
+	// aiCallTimeout : délai d'un appel IA du planificateur (0 = défaut)
+	aiCallTimeout time.Duration
 }
 
 func NewStudio(store *Store) *Studio {
@@ -1313,6 +1317,25 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 
 // ---------------------------------------------------------------- statistiques
 
+const (
+	// metricsWindow : au-delà, un post n'est plus relevé… sauf rattrapage.
+	metricsWindow = 14 * 24 * time.Hour
+	// metricsCatchUpMax : tentatives de rattrapage par post (réussies ou non).
+	// Une mesure tardive réussie met fin au rattrapage ; l'échec s'arrête au plafond.
+	metricsCatchUpMax = 2
+	// metricsCatchUpGap : délai minimal entre deux tentatives de rattrapage d'un post.
+	metricsCatchUpGap = 6 * time.Hour
+)
+
+// hasLateMetrics : le post a une mesure assez tardive (perfMinAge après la
+// publication) pour nourrir l'analyse des performances.
+func hasLateMetrics(p *Post) bool {
+	return p.Metrics != nil && p.PublishedAt != nil && !p.Metrics.UpdatedAt.Before(p.PublishedAt.Add(perfMinAge))
+}
+
+// RefreshMetrics relève les statistiques des posts publiés depuis 14 jours. Un
+// post plus ancien qui n'a jamais reçu de mesure tardive est relevé une
+// dernière fois (rattrapage), au plus metricsCatchUpMax fois.
 func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int, error) {
 	d := s.store.Snapshot()
 	updated := 0
@@ -1321,8 +1344,20 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 		if p.Status != StatusPublished || p.TweetID == "" || strings.HasPrefix(p.TweetID, "dry-") || p.PublishedAt == nil {
 			continue
 		}
-		if s.now().Sub(*p.PublishedAt) > 14*24*time.Hour {
-			continue
+		catchUp := false
+		if s.now().Sub(*p.PublishedAt) > metricsWindow {
+			if hasLateMetrics(p) || p.MetricsCatchUps >= metricsCatchUpMax {
+				continue
+			}
+			// tentatives espacées : au moins max(maxAge, metricsCatchUpGap)
+			gap := metricsCatchUpGap
+			if maxAge > gap {
+				gap = maxAge
+			}
+			if !p.MetricsCatchUpAt.IsZero() && s.now().Sub(p.MetricsCatchUpAt) < gap {
+				continue
+			}
+			catchUp = true
 		}
 		if p.Metrics != nil && s.now().Sub(p.Metrics.UpdatedAt) < maxAge {
 			continue
@@ -1336,12 +1371,24 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 			lastErr = err
 			continue
 		}
+		if catchUp {
+			// la tentative est comptée avant l'appel : un échec ne relance pas
+			// le rattrapage à chaque passage.
+			id := p.ID
+			_ = s.store.Update(func(d *Data) error {
+				if x := d.Post(id); x != nil {
+					x.MetricsCatchUps++
+					x.MetricsCatchUpAt = s.now().UTC()
+				}
+				return nil
+			})
+		}
 		t, err := be.Tweet(ctx, p.TweetID)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		m := &Metrics{Likes: t.Metrics.Likes, Retweets: t.Metrics.Retweets, Replies: t.Metrics.Replies,
+		m := &Metrics{ViewsKnown: t.Metrics.ViewsKnown || t.Metrics.Views > 0, Likes: t.Metrics.Likes, Retweets: t.Metrics.Retweets, Replies: t.Metrics.Replies,
 			Quotes: t.Metrics.Quotes, Views: t.Metrics.Views, Bookmarks: t.Metrics.Bookmarks, UpdatedAt: s.now().UTC()}
 		if m.Views > 0 {
 			eng := m.Likes + m.Retweets + m.Replies + m.Quotes + m.Bookmarks
@@ -1359,19 +1406,49 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 	return updated, lastErr
 }
 
-// Tick est un passage du planificateur : publication, veille, tri, statistiques.
+// Tick est un passage complet (publication puis traitements IA), pour la
+// ligne de commande et les tests. Le planificateur, lui, lance les deux
+// moitiés dans des boucles séparées (runSchedulerLoops).
 func (s *Studio) Tick(ctx context.Context) map[string]any {
+	out := s.TickPublish(ctx)
+	for k, v := range s.TickAI(ctx) {
+		if k != "at" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// TickPublish : la publication et ce qui doit partir à l'heure, sans aucun
+// appel IA. Saute le passage si le précédent tourne encore.
+func (s *Studio) TickPublish(ctx context.Context) map[string]any {
 	out := map[string]any{"at": s.now().UTC()}
+	if !s.beginLoop(schedulerLoopPublish) {
+		return out
+	}
+	defer s.endLoop(schedulerLoopPublish)
 	if r := s.PublishDue(ctx); len(r) > 0 {
 		out["published"] = r
 	}
-	s.recordLoop(loopPublish)
 	if n := s.LinkedInExpiryWatch(); n > 0 {
 		out["linkedinAlerts"] = n
 	}
 	if n := s.CleanMedia(); n > 0 {
 		out["mediaCleaned"] = n
 	}
+	return out
+}
+
+// TickAI : veille, tri, actualités, statistiques, campagnes, synthèse,
+// analyse. Chaque appel IA est borné (délai, concurrence). Saute le passage
+// si le précédent tourne encore.
+func (s *Studio) TickAI(ctx context.Context) map[string]any {
+	out := map[string]any{"at": s.now().UTC()}
+	if !s.beginLoop(schedulerLoopAI) {
+		return out
+	}
+	defer s.endLoop(schedulerLoopAI)
+	ctx = schedulerCtx(ctx)
 	if r := s.PollWatch(ctx, "", false); len(r) > 0 {
 		out["watch"] = r
 	}
@@ -1386,6 +1463,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
+	}
+	if n, _ := s.RecordFollowers(ctx); n > 0 {
+		out["followers"] = n
 	}
 	if r := s.RunCampaigns(ctx); len(r) > 0 {
 		out["campaigns"] = r
@@ -1417,7 +1497,6 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 			s.logf("analyse des performances : échec de l'enregistrement dans data.json")
 		}
 	}
-	s.recordLoop(loopWatch)
 	return out
 }
 

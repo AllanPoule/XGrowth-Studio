@@ -261,8 +261,8 @@ func TestControlReportLateLoopsAndConnections(t *testing.T) {
 		}
 	}
 	e.st.every = time.Minute
-	e.st.recordLoop(loopPublish)
-	e.st.recordLoop(loopWatch)
+	e.st.recordLoop(schedulerLoopPublish, e.st.now())
+	e.st.recordLoop(schedulerLoopAI, e.st.now())
 	for _, l := range e.st.ControlReport(e.st.store.Snapshot()).Loops {
 		if l.Stale || l.LastAt == nil {
 			t.Fatalf("passage récent jugé ancien : %+v", l)
@@ -304,5 +304,22 @@ func TestControlReportListsUncertain(t *testing.T) {
 	r := e.st.ControlReport(e.st.store.Snapshot())
 	if len(r.Uncertain) != 1 || r.Uncertain[0].ID != p.ID || len(r.Late) != 0 {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// Les deux boucles de loops.go notent chacune leur dernier passage, via endLoop.
+func TestControlTickRecordsEachLoop(t *testing.T) {
+	e := newEnv(t)
+	e.st.every = time.Minute
+	e.st.TickPublish(context.Background())
+	byName := map[string]LoopHealth{}
+	for _, l := range e.st.ControlReport(e.st.store.Snapshot()).Loops {
+		byName[l.Name] = l
+	}
+	if byName[schedulerLoopPublish].LastAt == nil || byName[schedulerLoopPublish].Stale {
+		t.Fatalf("passage publication non noté : %+v", byName[schedulerLoopPublish])
+	}
+	if byName[schedulerLoopAI].LastAt != nil || !byName[schedulerLoopAI].Stale {
+		t.Fatalf("la boucle IA n'a pas tourné, elle doit être signalée : %+v", byName[schedulerLoopAI])
 	}
 }

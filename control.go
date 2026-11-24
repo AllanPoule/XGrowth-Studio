@@ -111,13 +111,9 @@ func (s *Studio) SetPaused(name string, paused bool) (*Account, error) {
 
 // Boucles du planificateur suivies : la publication d'abord (ce qui compte
 // pour ne rien rater), puis le reste d'un passage (veille, tri, statistiques).
-const (
-	loopPublish = "publication"
-	loopWatch   = "veille"
-)
-
-var loopLabels = map[string]string{loopPublish: "Publication", loopWatch: "Veille, tri et statistiques"}
-var loopOrder = []string{loopPublish, loopWatch}
+// Les noms viennent de loops.go (schedulerLoopPublish, schedulerLoopAI).
+var loopLabels = map[string]string{schedulerLoopPublish: "Publication", schedulerLoopAI: "Veille, tri et statistiques (IA)"}
+var loopOrder = []string{schedulerLoopPublish, schedulerLoopAI}
 
 type loopPass struct {
 	At       time.Time `json:"at"`
@@ -143,17 +139,18 @@ func (s *Studio) readLoops() map[string]loopPass {
 	return f.Loops
 }
 
-// recordLoop note l'heure du passage d'une boucle, dans un petit fichier à part
+// recordLoop note l'heure de fin d'un passage (appelé par endLoop, loops.go),
+// dans un petit fichier à part
 // (scheduler.json) : l'état survit au redémarrage et se partage entre le
 // processus du planificateur et celui du studio, sans réécrire data.json à
 // chaque passage. Un échec d'écriture ne bloque jamais le planificateur.
-func (s *Studio) recordLoop(name string) {
+func (s *Studio) recordLoop(name string, at time.Time) {
 	every := s.every
 	if every <= 0 {
 		every = defaultEvery
 	}
 	loops := s.readLoops()
-	loops[name] = loopPass{At: s.now().UTC(), EverySec: int(every / time.Second)}
+	loops[name] = loopPass{At: at.UTC(), EverySec: int(every / time.Second)}
 	b, err := json.Marshal(loopFile{Loops: loops})
 	if err == nil {
 		err = writeFileDurable(s.loopsPath(), b)
@@ -165,7 +162,7 @@ func (s *Studio) recordLoop(name string) {
 
 // ---------------------------------------------------------------- rapport
 
-type LoopStatus struct {
+type LoopHealth struct {
 	Name     string     `json:"name"`
 	Label    string     `json:"label"`
 	LastAt   *time.Time `json:"lastAt,omitempty"` // absent : aucun passage connu
@@ -214,7 +211,7 @@ type ControlReport struct {
 	OK          bool              `json:"ok"`
 	Attention   int               `json:"attention"` // nombre de points qui demandent une action
 	Accounts    []PausedAccount   `json:"accounts"`
-	Loops       []LoopStatus      `json:"loops"`
+	Loops       []LoopHealth      `json:"loops"`
 	Late        []LatePost        `json:"late"`
 	Connections []ConnectionIssue `json:"connections"`
 	Uncertain   []UncertainPost   `json:"uncertain"`
@@ -258,11 +255,20 @@ func lateAfter(d *Data, now time.Time) []LatePost {
 	return out
 }
 
-func (s *Studio) loopStatuses(now time.Time) []LoopStatus {
+func (s *Studio) loopStatuses(now time.Time) []LoopHealth {
 	passes := s.readLoops()
-	out := make([]LoopStatus, 0, len(loopOrder))
+	// l'état en mémoire de loops.go (même processus) peut être plus récent
+	for name, ls := range s.SchedulerStatus() {
+		if ls.LastEnd == nil {
+			continue
+		}
+		if p, ok := passes[name]; !ok || ls.LastEnd.After(p.At) {
+			passes[name] = loopPass{At: *ls.LastEnd, EverySec: int(s.every / time.Second)}
+		}
+	}
+	out := make([]LoopHealth, 0, len(loopOrder))
 	for _, name := range loopOrder {
-		ls := LoopStatus{Name: name, Label: loopLabels[name]}
+		ls := LoopHealth{Name: name, Label: loopLabels[name]}
 		p, ok := passes[name]
 		if !ok || p.At.IsZero() {
 			ls.Stale = true // jamais passé : le planificateur ne tourne pas

@@ -42,8 +42,14 @@ dernière version.
     rapport ; `/api/state` l'inclut (`control`).
   - Tests Go : compte en pause non publié (et pause conservée après redémarrage), envoi incertain jamais relancé,
     résolution obligatoire par vérification, détection des retards, des passages anciens et des connexions.
-
-### Ajouté
+- **Statistiques utiles pour décider** : la page Performances a un filtre par compte et par période (7, 30, 90 jours
+  ou tout), des comparaisons par type de post, longueur, visuel et origine (veille, idée, campagne, à la main), et
+  la date du dernier relevé de chaque mesure. Une donnée absente s'affiche « indisponible », jamais 0 (vues non
+  renvoyées par le backend, post jamais relevé, LinkedIn) ; un vrai zéro mesuré reste 0. Les comparaisons sont
+  descriptives et ne disent rien des causes. Le relevé rattrape les posts de plus de 14 jours qui n'ont aucune
+  mesure tardive (au moins 48 h après la publication) : au plus 2 tentatives par post, comptées même en cas d'échec et espacées d'au moins 6 h.
+  Suivi quotidien des abonnés (un relevé par jour et par compte) pour les backends agentx et xapi ; « indisponible »
+  pour les autres et tant que le backend ne renvoie pas le nombre (au plus une tentative par heure et par compte, même en cas d'échec). Nouvelle route : `GET /api/stats?account=&days=`.
 - **Visuels déposés depuis le navigateur** : on glisse ou on choisit une image (le sélecteur marche sur mobile), avec
   aperçu, texte alternatif (LinkedIn), remplacement et retrait, au lieu de saisir un chemin de fichier du serveur.
   Le serveur contrôle le contenu réel (en-tête de l'image et type MIME détecté, pas l'extension), la taille et les
@@ -97,6 +103,15 @@ dernière version.
   filtre par ligne. Plafond de posts par semaine réglé par Allan (`--weekly-cap`, 0 = aucun, lundi à dimanche dans le
   fuseau du compte). Visuel vérifié à l'enregistrement (JPG, PNG, GIF, 10 Mo, 36 152 320 pixels) avec texte
   alternatif, publié avec le post ; avertissement si une idée de visuel n'a pas d'image.
+
+### Modifié
+- **Publication séparée des traitements IA** ([#27](https://github.com/AllanPoule/XGrowth-Studio/issues/27), C16) :
+  le planificateur lance deux boucles indépendantes, l'une pour la publication (et les alertes d'expiration
+  LinkedIn), l'autre pour les traitements IA (veille, tri, actualités, campagnes, synthèse, analyse). Un
+  fournisseur IA lent ou bloqué ne retarde plus un post programmé. Chaque appel IA du planificateur a un délai
+  maximal de 3 minutes, au plus 2 appels IA simultanés, et un passage n'en chevauche jamais un autre de la même
+  boucle. Arrêt propre des deux boucles à la fermeture (`run` comme `serve`, qui attend la fin du planificateur, 30 s au plus). `GET /api/scheduler` donne l'heure du dernier passage de
+  chaque boucle. Les demandes manuelles ne sont pas coupées par ce délai.
 
 ## V0.10 — 19 novembre 2026
 
