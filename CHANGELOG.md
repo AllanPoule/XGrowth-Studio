@@ -80,6 +80,15 @@ dernière version.
   fuseau du compte). Visuel vérifié à l'enregistrement (JPG, PNG, GIF, 10 Mo, 36 152 320 pixels) avec texte
   alternatif, publié avec le post ; avertissement si une idée de visuel n'a pas d'image.
 
+### Modifié
+- **Publication séparée des traitements IA** ([#27](https://github.com/AllanPoule/XGrowth-Studio/issues/27), C16) :
+  le planificateur lance deux boucles indépendantes, l'une pour la publication (et les alertes d'expiration
+  LinkedIn), l'autre pour les traitements IA (veille, tri, actualités, campagnes, synthèse, analyse). Un
+  fournisseur IA lent ou bloqué ne retarde plus un post programmé. Chaque appel IA du planificateur a un délai
+  maximal de 3 minutes, au plus 2 appels IA simultanés, et un passage n'en chevauche jamais un autre de la même
+  boucle. Arrêt propre des deux boucles à la fermeture (`run` comme `serve`, qui attend la fin du planificateur, 30 s au plus). `GET /api/scheduler` donne l'heure du dernier passage de
+  chaque boucle. Les demandes manuelles ne sont pas coupées par ce délai.
+
 ## V0.10 — 19 novembre 2026
 
 [PR n°16](https://github.com/AllanPoule/XGrowth-Studio/pull/16) · Mémoire persistante et auto-amélioration : lot 1
