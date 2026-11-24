@@ -7,6 +7,9 @@ dernière version.
 ## Non publié
 
 ### Ajouté
+- **Écritures durables et sauvegardes** : `fsync` du fichier temporaire puis du dossier (0600), une sauvegarde par jour
+  dans `backups/` (`XGROWTH_BACKUP_KEEP`, 7 par défaut), `xgrowth restore <fichier>` avec validation du contenu et copie
+  de l'état courant avant remplacement. `data.json` garde son nom et son emplacement. Voir le README (secrets inclus).
 - **LinkedIn, lot 2** : connexion OAuth (`/api/linkedin/connect`, `/auth/linkedin/callback`), publication par
   l'API officielle (texte et image) à l'heure programmée après validation, état de connexion du jeton, alertes
   d'expiration (J-14, J-7, J-3, J-1, expiration) dans le journal, `xgrowth linkedin status` et `to-manual <id>`.
