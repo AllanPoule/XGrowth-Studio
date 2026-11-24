@@ -26,6 +26,7 @@ const (
 	StatusScheduled  = "scheduled"  // validé, avec une date de publication
 	StatusValidated  = "validated"  // validé, à publier dès que possible
 	StatusPublishing = "publishing" // envoi en cours : jamais relancé automatiquement
+	StatusUncertain  = "uncertain"  // envoi parti mais résultat inconnu (réseau, délai) : jamais relancé automatiquement, à vérifier à la main (control.go)
 	StatusPublished  = "published"
 	StatusFailed     = "failed"
 	StatusRejected   = "rejected"
@@ -93,6 +94,11 @@ type Account struct {
 	AIModel    string       `json:"aiModel,omitempty"`    // vide = modèle des réglages
 	Ideas      IdeaSettings `json:"ideas,omitzero"`
 	Timing     Timing       `json:"timing,omitzero"`
+
+	// Pause : le planificateur ne publie rien pour ce compte (les posts restent
+	// en file, la publication reprend à la reprise). Voir control.go.
+	Paused   bool       `json:"paused,omitempty"`
+	PausedAt *time.Time `json:"pausedAt,omitempty"`
 }
 
 type Metrics struct {

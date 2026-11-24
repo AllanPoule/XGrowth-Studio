@@ -481,7 +481,7 @@ func (b *linkedinBackend) Post(ctx context.Context, r PostRequest) (string, erro
 	buf, _ := json.Marshal(body)
 	resp, raw, err := b.request(ctx, "POST", b.cfg.APIBase+"/rest/posts", bytes.NewReader(buf), "application/json", true)
 	if err != nil {
-		return "", err
+		return "", markUncertain(err) // la demande est partie : le post a pu être créé
 	}
 	if resp.StatusCode != http.StatusCreated {
 		return "", b.apiError("publication", resp.StatusCode, raw)

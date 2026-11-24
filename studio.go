@@ -26,6 +26,9 @@ type Studio struct {
 	// logf écrit dans le journal du processus (sortie d'erreur), pour ce qui
 	// ne peut pas aller dans le journal de data.json
 	logf func(format string, args ...any)
+	// every : intervalle du planificateur (renseigné par runSchedulerLoops),
+	// pour savoir quand un passage est trop ancien
+	every time.Duration
 	// loopSt : état des boucles du planificateur (loops.go)
 	loopSt loopState
 	// aiCallTimeout : délai d'un appel IA du planificateur (0 = défaut)
@@ -153,10 +156,13 @@ func (s *Studio) SaveAccount(a *Account) error {
 			} else if isLinkedIn(a) {
 				a.AuthorURN = ""
 			}
+			// la pause se règle par SetPaused, jamais par le formulaire du compte
+			a.Paused, a.PausedAt = old.Paused, old.PausedAt
 			*old = *a
 			return nil
 		}
 		a.AuthorURN = "" // posé uniquement par la connexion OAuth
+		a.Paused, a.PausedAt = false, nil
 		d.Accounts = append(d.Accounts, a)
 		return nil
 	})
@@ -720,7 +726,7 @@ func NextSlot(d *Data, a *Account, after time.Time, skipID string) (time.Time, e
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusUncertain || p.Status == StatusManual) && p.ScheduledAt != nil:
 			taken = append(taken, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			taken = append(taken, *p.PublishedAt)
@@ -897,10 +903,14 @@ type PublishResult struct {
 func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 	var results []PublishResult
 	var due []string
+	s.recoverStuckPublishing()
 	s.store.View(func(d *Data) {
 		now := s.now()
 		for _, p := range d.Posts {
 			if (p.Status == StatusScheduled || p.Status == StatusValidated) && p.ScheduledAt != nil && !p.ScheduledAt.After(now) {
+				if a := d.Account(p.Account); a != nil && a.Paused {
+					continue // compte en pause : le post reste en file
+				}
 				due = append(due, p.ID)
 			}
 		}
@@ -916,6 +926,9 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				return errors.New("déjà traité")
 			}
 			a := d.Account(p.Account)
+			if a != nil && a.Paused {
+				return errors.New("compte en pause") // mis en pause depuis le choix : rien ne change
+			}
 			if a == nil {
 				p.Status, p.Error = StatusFailed, "compte supprimé"
 				skip = p.Error
@@ -967,7 +980,7 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				return nil
 			}
 			prev = p.Status
-			p.Status = StatusPublishing
+			p.Status, p.UpdatedAt = StatusPublishing, s.now().UTC()
 			post, acct = *p, *a
 			return nil
 		})
@@ -991,7 +1004,9 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 			// identité du membre derrière le jeton, vérifiée avant chaque envoi
 			_, err = be.Me(ctx)
 		}
+		sent := false // vrai dès que be.Post est appelé : avant, un échec est net
 		if err == nil {
+			sent = true
 			tweetID, err = be.Post(ctx, PostRequest{Text: post.Text, ReplyTo: post.ReplyTo, QuoteOf: post.QuoteOf, MediaPath: s.mediaSource(&post), MediaAlt: post.MediaAlt, ValidatedBy: post.ValidatedBy})
 		}
 		r := PublishResult{PostID: id, Account: acct.Name}
@@ -1023,6 +1038,15 @@ func (s *Studio) PublishDue(ctx context.Context) []PublishResult {
 				r.Status, r.Error = StatusManual, p.Error
 				return nil
 			}
+			if err != nil && sent && uncertainOutcome(err) {
+				// l'envoi est parti, la réponse n'est pas arrivée : le post a pu
+				// être publié. Jamais relancé tout seul (doublon) : Allan vérifie.
+				p.Status = StatusUncertain
+				p.Error = "résultat incertain (" + err.Error() + ") : vérifiez sur le compte si le post est parti"
+				d.AddLog("warn", "publication de %s (@%s) au résultat incertain : %v", id, acct.Handle, err)
+				r.Status, r.Error = StatusUncertain, p.Error
+				return nil
+			}
 			if err != nil {
 				p.Status, p.Error = StatusFailed, err.Error()
 				d.AddLog("error", "publication de %s (@%s) échouée : %v", id, acct.Handle, err)
@@ -1051,12 +1075,8 @@ func (s *Studio) MarkPublished(id, url string) (*Post, error) {
 	var out *Post
 	u := strings.TrimSpace(url)
 	if u != "" {
-		pu, perr := neturl.Parse(u)
-		if perr != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Hostname() == "" {
-			return nil, errors.New("url invalide : une adresse http(s) complète est attendue")
-		}
-		if strings.ContainsAny(u, " \t\r\n\"'<>`") {
-			return nil, errors.New("url invalide : caractères interdits")
+		if _, err := postURL(u); err != nil {
+			return nil, err
 		}
 	}
 	err := s.store.Update(func(d *Data) error {
@@ -1482,3 +1502,52 @@ func (s *Studio) TickAI(ctx context.Context) map[string]any {
 
 // hasMedia : le post a une image, déposée (copie stable) ou par chemin serveur (ancien mode).
 func hasMedia(p *Post) bool { return p.MediaPath != "" || p.MediaFile != "" }
+
+// ResolveUncertain : Allan a vérifié sur le compte ce qu'il est advenu d'un
+// envoi au résultat incertain. Soit le post est en ligne (`url` : son lien, le
+// post devient publié), soit il n'est pas parti (`notSent`) et il repart à la
+// prochaine passe. Sans l'un des deux, rien ne bouge : pas de doublon.
+func (s *Studio) ResolveUncertain(id, url string, notSent bool) (*Post, error) {
+	url = strings.TrimSpace(url)
+	if (url == "") == !notSent {
+		return nil, errors.New("indiquez le lien du post publié, ou confirmez qu'il n'est pas parti (jamais les deux)")
+	}
+	var pu *neturl.URL
+	if url != "" {
+		var err error
+		if pu, err = postURL(url); err != nil {
+			return nil, err
+		}
+	}
+	var out *Post
+	err := s.store.Update(func(d *Data) error {
+		p := d.Post(id)
+		if p == nil {
+			return fmt.Errorf("post %q inconnu", id)
+		}
+		if p.Status != StatusUncertain {
+			return fmt.Errorf("le post %s est %s : seul un envoi au résultat incertain se règle ainsi", id, p.Status)
+		}
+		t := s.now().UTC()
+		if pu != nil {
+			a := d.Account(p.Account)
+			if a != nil && isLinkedIn(a) {
+				p.PostURN = url
+			} else {
+				tid, err := xTweetIDFromURL(pu)
+				if err != nil {
+					return err
+				}
+				p.TweetID = tid
+			}
+			p.Status, p.PublishedAt, p.Error, p.UpdatedAt = StatusPublished, &t, "", t
+			d.AddLog("info", "post %s : publication vérifiée à la main, lien renseigné", id)
+		} else {
+			p.Status, p.ScheduledAt, p.Error, p.UpdatedAt = StatusScheduled, &t, "", t
+			d.AddLog("warn", "post %s : vérifié non parti, relancé à la main", id)
+		}
+		out = p
+		return nil
+	})
+	return out, err
+}

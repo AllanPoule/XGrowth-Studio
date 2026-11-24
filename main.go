@@ -660,7 +660,7 @@ func calendar(d *Data, days int, now time.Time) []CalendarDay {
 	for _, p := range d.Posts {
 		var t *time.Time
 		switch p.Status {
-		case StatusScheduled, StatusValidated, StatusPublishing, StatusManual:
+		case StatusScheduled, StatusValidated, StatusPublishing, StatusUncertain, StatusManual:
 			t = p.ScheduledAt
 		case StatusPublished:
 			t = p.PublishedAt

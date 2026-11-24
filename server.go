@@ -118,6 +118,7 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"commentsDefault": DefaultCommentsPrompt,
 			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes, "linkedin": map[string]any{"maxChars": linkedinMaxChars, "lines": linkedinLines}},
 			"linkedin":        map[string]any{"configured": st.liCfg().configured(), "accounts": st.linkedinStates(d)},
+			"control":         st.ControlReport(d),
 			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
@@ -382,6 +383,15 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/triage", func(r *http.Request, b map[string]any) (any, error) {
 		return st.TriagePending(r.Context(), s(b, "account"), false, bl(b, "draft")), nil
+	})
+	mux.HandleFunc("GET /api/control", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, st.ControlReport(st.store.Snapshot()), nil)
+	})
+	post("/api/accounts/{name}/pause", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SetPaused(r.PathValue("name"), bl(b, "paused"))
+	})
+	post("/api/posts/{id}/uncertain", func(r *http.Request, b map[string]any) (any, error) {
+		return st.ResolveUncertain(r.PathValue("id"), s(b, "url"), bl(b, "notSent"))
 	})
 	post("/api/publish-due", func(r *http.Request, b map[string]any) (any, error) {
 		return st.PublishDue(r.Context()), nil
