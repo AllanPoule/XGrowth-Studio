@@ -1293,6 +1293,23 @@ func (s *Studio) TriagePending(ctx context.Context, account string, onlyAuto, dr
 
 // ---------------------------------------------------------------- statistiques
 
+const (
+	// metricsWindow : au-delà, un post n'est plus relevé… sauf rattrapage.
+	metricsWindow = 14 * 24 * time.Hour
+	// metricsCatchUpMax : tentatives de rattrapage par post (réussies ou non).
+	// Une mesure tardive réussie met fin au rattrapage ; l'échec s'arrête au plafond.
+	metricsCatchUpMax = 2
+)
+
+// hasLateMetrics : le post a une mesure assez tardive (perfMinAge après la
+// publication) pour nourrir l'analyse des performances.
+func hasLateMetrics(p *Post) bool {
+	return p.Metrics != nil && p.PublishedAt != nil && !p.Metrics.UpdatedAt.Before(p.PublishedAt.Add(perfMinAge))
+}
+
+// RefreshMetrics relève les statistiques des posts publiés depuis 14 jours. Un
+// post plus ancien qui n'a jamais reçu de mesure tardive est relevé une
+// dernière fois (rattrapage), au plus metricsCatchUpMax fois.
 func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int, error) {
 	d := s.store.Snapshot()
 	updated := 0
@@ -1301,8 +1318,12 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 		if p.Status != StatusPublished || p.TweetID == "" || strings.HasPrefix(p.TweetID, "dry-") || p.PublishedAt == nil {
 			continue
 		}
-		if s.now().Sub(*p.PublishedAt) > 14*24*time.Hour {
-			continue
+		catchUp := false
+		if s.now().Sub(*p.PublishedAt) > metricsWindow {
+			if hasLateMetrics(p) || p.MetricsCatchUps >= metricsCatchUpMax {
+				continue
+			}
+			catchUp = true
 		}
 		if p.Metrics != nil && s.now().Sub(p.Metrics.UpdatedAt) < maxAge {
 			continue
@@ -1316,12 +1337,23 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 			lastErr = err
 			continue
 		}
+		if catchUp {
+			// la tentative est comptée avant l'appel : un échec ne relance pas
+			// le rattrapage à chaque passage.
+			id := p.ID
+			_ = s.store.Update(func(d *Data) error {
+				if x := d.Post(id); x != nil {
+					x.MetricsCatchUps++
+				}
+				return nil
+			})
+		}
 		t, err := be.Tweet(ctx, p.TweetID)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		m := &Metrics{Likes: t.Metrics.Likes, Retweets: t.Metrics.Retweets, Replies: t.Metrics.Replies,
+		m := &Metrics{ViewsKnown: t.Metrics.ViewsKnown || t.Metrics.Views > 0, Likes: t.Metrics.Likes, Retweets: t.Metrics.Retweets, Replies: t.Metrics.Replies,
 			Quotes: t.Metrics.Quotes, Views: t.Metrics.Views, Bookmarks: t.Metrics.Bookmarks, UpdatedAt: s.now().UTC()}
 		if m.Views > 0 {
 			eng := m.Likes + m.Retweets + m.Replies + m.Quotes + m.Bookmarks
@@ -1365,6 +1397,9 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	if n, _ := s.RefreshMetrics(ctx, 6*time.Hour); n > 0 {
 		out["metrics"] = n
+	}
+	if n, _ := s.RecordFollowers(ctx); n > 0 {
+		out["followers"] = n
 	}
 	if r := s.RunCampaigns(ctx); len(r) > 0 {
 		out["campaigns"] = r

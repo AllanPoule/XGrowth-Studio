@@ -41,9 +41,29 @@ type Tweet struct {
 		Quotes    int `json:"quotes"`
 		Views     int `json:"views"`
 		Bookmarks int `json:"bookmarks"`
+		// ViewsKnown : le backend a renvoyé un nombre de vues (même 0).
+		ViewsKnown bool `json:"-"`
 	} `json:"metrics"`
 	IsRetweet bool `json:"isRetweet,omitempty"`
 	IsReply   bool `json:"isReply,omitempty"`
+}
+
+// UnmarshalJSON retient si « views » était présent : un champ absent n'est pas
+// un zéro.
+func (t *Tweet) UnmarshalJSON(b []byte) error {
+	type plain Tweet
+	if err := json.Unmarshal(b, (*plain)(t)); err != nil {
+		return err
+	}
+	var probe struct {
+		Metrics struct {
+			Views *int `json:"views"`
+		} `json:"metrics"`
+	}
+	if json.Unmarshal(b, &probe) == nil && probe.Metrics.Views != nil {
+		t.Metrics.ViewsKnown = true
+	}
+	return nil
 }
 
 type PostRequest struct {
@@ -284,12 +304,12 @@ type xapiTweet struct {
 	AuthorID      string `json:"author_id"`
 	CreatedAt     string `json:"created_at"`
 	PublicMetrics struct {
-		Like       int `json:"like_count"`
-		Retweet    int `json:"retweet_count"`
-		Reply      int `json:"reply_count"`
-		Quote      int `json:"quote_count"`
-		Impression int `json:"impression_count"`
-		Bookmark   int `json:"bookmark_count"`
+		Like       int  `json:"like_count"`
+		Retweet    int  `json:"retweet_count"`
+		Reply      int  `json:"reply_count"`
+		Quote      int  `json:"quote_count"`
+		Impression *int `json:"impression_count"`
+		Bookmark   int  `json:"bookmark_count"`
 	} `json:"public_metrics"`
 }
 
@@ -333,7 +353,9 @@ func (x xapiTweet) toTweet(user [2]string) Tweet {
 	t.Metrics.Retweets = x.PublicMetrics.Retweet
 	t.Metrics.Replies = x.PublicMetrics.Reply
 	t.Metrics.Quotes = x.PublicMetrics.Quote
-	t.Metrics.Views = x.PublicMetrics.Impression
+	if x.PublicMetrics.Impression != nil {
+		t.Metrics.Views, t.Metrics.ViewsKnown = *x.PublicMetrics.Impression, true
+	}
 	t.Metrics.Bookmarks = x.PublicMetrics.Bookmark
 	return t
 }

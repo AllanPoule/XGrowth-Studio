@@ -782,19 +782,57 @@ function itemCard(i) {
       </div></div></article>`;
 }
 
+// Une donnée absente s'affiche « indisponible », jamais 0 (null côté serveur).
+const NA = `<span class="muted" title="Mesure absente, ce n'est pas un zéro">indisponible</span>`;
+const nOrNA = n => n == null ? NA : nf(n);
+const pctOrNA = n => n == null ? NA : n.toFixed(1) + " %";
+const STAT_DAYS = [["7", "7 derniers jours"], ["30", "30 derniers jours"], ["90", "90 derniers jours"], ["0", "Tout l'historique"]];
+let statSeq = 0;
+
+function statFresh(p) {
+  if (!p.measured) return `<span class="muted">${esc(p.unavailable || "indisponible")}</span>`;
+  return p.measuredAt ? `${fmtDate(p.measuredAt, { dateStyle: "short", timeStyle: "short" })}${p.late ? "" : ` <span class="pill" title="Relevé précoce : les chiffres vont encore bouger">précoce</span>`}` : NA;
+}
+
+function statCompare(title, groups) {
+  if (!groups?.length) return "";
+  return `<div class="card" style="padding:6px 8px;overflow-x:auto"><table><tr><th>${esc(title)}</th><th class="num">Posts</th><th class="num">Eng. médian</th><th class="num">Vues</th></tr>
+    ${groups.map(g => `<tr><td>${esc(g.label)}</td><td class="num">${g.posts}</td><td class="num">${pctOrNA(g.medianEngagement)}${g.withEngagement && g.withEngagement < g.posts ? ` <span class="small muted">(${g.withEngagement}/${g.posts})</span>` : ""}</td><td class="num">${nOrNA(g.views)}${g.views != null && g.viewsPosts < g.posts ? ` <span class="small muted">(${g.viewsPosts}/${g.posts})</span>` : ""}</td></tr>`).join("")}</table></div>`;
+}
+
+function statFollowers(list) {
+  return list.map(f => {
+    const acc = acct(f.account), name = (acc && !isLI(f.account) ? "@" : "") + (acc?.handle || f.account);
+    if (!f.available || !f.points.length) return `<div class="card"><b>${esc(name)}</b> · abonnés : ${NA} <span class="small muted">${esc((f.unavailable || "").replace(/^indisponible : /, ""))}</span></div>`;
+    const last = f.points[f.points.length - 1];
+    return `<div class="card"><b>${esc(name)}</b> · ${nf(last.count)} abonnés au ${esc(last.day)}${f.change != null ? ` · ${f.change > 0 ? "+" : ""}${f.change} sur la période` : ` <span class="small muted">(un seul relevé pour l'instant)</span>`}</div>`;
+  }).join("");
+}
+
 function vPublished(v) {
-  const ps = S.posts.filter(p => inCtx(p.account) && p.status === "published").sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-  const withM = ps.filter(p => p.metrics);
-  const tot = k => withM.reduce((s, p) => s + (p.metrics[k] || 0), 0);
-  const top = withM.slice().sort((a, b) => b.metrics.engagementRatePct - a.metrics.engagementRatePct).slice(0, 3);
-  const last = withM.slice(0, 20).reverse(), maxV = Math.max(1, ...last.map(p => p.metrics.views));
-  v.innerHTML = `<div class="head"><div><h1>Performances</h1><p>${ps.length} post${ps.length > 1 ? "s" : ""} publié${ps.length > 1 ? "s" : ""}. Les statistiques se rafraîchissent toutes les 6 h.</p></div><button class="btn sm" data-act="metrics">${I.refresh} Rafraîchir</button></div>
-    <div class="kpis"><div class="kpi"><div class="k">Vues</div><div class="v">${nf(tot("views"))}</div></div><div class="kpi"><div class="k">J'aime</div><div class="v">${nf(tot("likes"))}</div></div>
-      <div class="kpi"><div class="k">Reposts</div><div class="v">${nf(tot("retweets"))}</div></div><div class="kpi"><div class="k">Réponses</div><div class="v">${nf(tot("replies"))}</div></div></div>
-    ${last.length > 1 ? `<h2>Vues des derniers posts</h2><div class="card"><svg viewBox="0 0 ${last.length * 30} 120" style="width:100%;height:140px" preserveAspectRatio="none"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs>${last.map((p, i) => { const h = Math.max(2, (p.metrics.views / maxV) * 112); return `<rect x="${i * 30 + 5}" y="${120 - h}" width="20" height="${h}" rx="4" fill="url(#bg)"><title>${esc(p.text.slice(0, 80))} — ${p.metrics.views} vues</title></rect>` }).join("")}</svg></div>` : ""}
-    ${top.length ? `<h2>Meilleurs posts</h2>${top.map(p => tweetCard(p, "view")).join("")}` : ""}
-    <h2>Historique</h2>${ps.length ? `<div class="card" style="padding:6px 8px;overflow-x:auto"><table><tr><th>Date</th><th>Post</th><th class="num">Vues</th><th class="num">♥</th><th class="num">↻</th><th class="num">Eng.</th></tr>
-      ${ps.map(p => { const m = p.metrics || {}, u = tweetURL(p); return `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(p.publishedAt, { dateStyle: "short", timeStyle: "short" })}</td><td>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener">` : ""}${esc(p.text.slice(0, 110))}${p.text.length > 110 ? "…" : ""}${u ? "</a>" : ""}</td><td class="num">${m.views != null ? nf(m.views) : "–"}</td><td class="num">${m.likes ?? "–"}</td><td class="num">${m.retweets ?? "–"}</td><td class="num">${m.views ? m.engagementRatePct.toFixed(1) + " %" : "–"}</td></tr>` }).join("")}</table></div>` : empty(I.chart, "Pas encore de publication", "Vos posts publiés et leurs statistiques apparaîtront ici.")}`;
+  const acc = ctxName(), days = store.get("statDays", "30"), seq = ++statSeq;
+  v.innerHTML = `<div class="head"><div><h1>Performances</h1><p>Les statistiques se rafraîchissent toutes les 6 h ; un post plus ancien que 14 jours sans mesure tardive est relevé une dernière fois.</p></div><button class="btn sm" data-act="metrics">${I.refresh} Rafraîchir</button></div>
+    <div class="row" style="margin-bottom:12px">${S.accounts.length > 1 ? ctxSelect(true, "stats-acc") : ""}<select data-stat-days aria-label="Période">${STAT_DAYS.map(([k, l]) => `<option value="${k}" ${k === days ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div id="statbody"><p class="muted">Chargement…</p></div>`;
+  api(`/api/stats?days=${encodeURIComponent(days)}${acc === ALL ? "" : "&account=" + encodeURIComponent(acc)}`).then(st => {
+    if (seq !== statSeq || !$("#statbody")) return;
+    const t = st.totals, ps = st.posts;
+    const withM = ps.filter(p => p.engagementPct != null).sort((a, b) => b.engagementPct - a.engagementPct).slice(0, 3);
+    const last = ps.filter(p => p.views != null).slice(0, 20).reverse(), maxV = Math.max(1, ...last.map(p => p.views));
+    const post = id => S.posts.find(x => x.id === id);
+    $("#statbody").innerHTML = `
+    <p class="small muted">${t.posts} post${t.posts > 1 ? "s" : ""} publié${t.posts > 1 ? "s" : ""} sur la période, ${t.measured} mesuré${t.measured > 1 ? "s" : ""}${t.neverMeasured ? `, ${t.neverMeasured} jamais relevé${t.neverMeasured > 1 ? "s" : ""}` : ""}. Dernier relevé : ${st.lastMeasure ? fmtDate(st.lastMeasure, { dateStyle: "short", timeStyle: "short" }) : NA}.</p>
+    <div class="kpis"><div class="kpi"><div class="k">Vues</div><div class="v">${nOrNA(t.views)}</div></div><div class="kpi"><div class="k">J'aime</div><div class="v">${nOrNA(t.likes)}</div></div>
+      <div class="kpi"><div class="k">Reposts</div><div class="v">${nOrNA(t.retweets)}</div></div><div class="kpi"><div class="k">Réponses</div><div class="v">${nOrNA(t.replies)}</div></div></div>
+    ${t.views != null && t.viewsPosts < t.measured ? `<p class="small muted">Les vues ne portent que sur ${t.viewsPosts} post${t.viewsPosts > 1 ? "s" : ""} sur ${t.measured} : pour les autres, le nombre de vues est indisponible.</p>` : ""}
+    ${last.length > 1 ? `<h2>Vues des derniers posts</h2><div class="card"><svg viewBox="0 0 ${last.length * 30} 120" style="width:100%;height:140px" preserveAspectRatio="none"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c7f586"/><stop offset="1" stop-color="#75dec1"/></linearGradient></defs>${last.map((p, i) => { const h = Math.max(2, (p.views / maxV) * 112); return `<rect x="${i * 30 + 5}" y="${120 - h}" width="20" height="${h}" rx="4" fill="url(#bg)"><title>${esc(p.text.slice(0, 80))} — ${p.views} vues</title></rect>` }).join("")}</svg></div>` : ""}
+    ${withM.length ? `<h2>Meilleurs taux d'engagement</h2>${withM.map(p => post(p.id) ? tweetCard(post(p.id), "view") : "").join("")}` : ""}
+    <h2>Comparaisons</h2><p class="small muted">${esc(st.note)}</p>
+    ${statCompare("Type de post", st.compare.kind)}${statCompare("Longueur", st.compare.length)}${statCompare("Visuel", st.compare.media)}${statCompare("Origine", st.compare.origin)}
+    <h2>Abonnés</h2>${st.followers.length ? statFollowers(st.followers) : `<p>${NA}</p>`}
+    <h2>Historique</h2>${ps.length ? `<div class="card" style="padding:6px 8px;overflow-x:auto"><table><tr><th>Date</th><th>Post</th><th class="num">Vues</th><th class="num">♥</th><th class="num">↻</th><th class="num">Eng.</th><th>Dernier relevé</th></tr>
+      ${ps.map(p => { const u = post(p.id) ? tweetURL(post(p.id)) : ""; return `<tr><td class="small muted" style="white-space:nowrap">${fmtDate(p.publishedAt, { dateStyle: "short", timeStyle: "short" })}</td><td>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener">` : ""}${esc(p.text)}${u ? "</a>" : ""}</td><td class="num">${nOrNA(p.views)}</td><td class="num">${nOrNA(p.likes)}</td><td class="num">${nOrNA(p.retweets)}</td><td class="num">${pctOrNA(p.engagementPct)}</td><td class="small" style="white-space:nowrap">${statFresh(p)}</td></tr>` }).join("")}</table></div>` : empty(I.chart, "Aucune publication sur cette période", "Changez de période ou de compte, ou publiez : les statistiques apparaîtront ici.")}`;
+  }).catch(e => { if (seq === statSeq && $("#statbody")) $("#statbody").innerHTML = `<p class="muted">Statistiques indisponibles : ${esc(e.message)}</p>` });
 }
 
 // ------------------------------------------------------------------ réglages
@@ -1408,6 +1446,8 @@ document.addEventListener("change", async e => {
   if (mf) { const f = mf.files[0]; mf.value = ""; dropMedia(mf.dataset.mediaFile, f); return }
   const sel = e.target.closest("[data-line]");
   if (sel) { try { await run(null, () => api(`/api/posts/${sel.dataset.line}/line`, { line: sel.value }), "Ligne changée : validation remise à zéro") } catch {} return }
+  const sd = e.target.closest("[data-stat-days]");
+  if (sd) { store.set("statDays", sd.value); render(); return }
   const lf = e.target.closest("[data-line-filter]");
   if (lf) { store.set("lineFilter", lf.value); render() }
 });
