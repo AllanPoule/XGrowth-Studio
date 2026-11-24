@@ -151,6 +151,16 @@ function rel(t) {
 const nf = n => new Intl.NumberFormat("fr-FR", { notation: n >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(n || 0);
 const acct = n => (S.accounts || []).find(a => a.name === n);
 const handleOf = n => acct(n)?.handle || n;
+// contexte de compte, commun à tout le studio : un compte, ou « tous » ("*"), mémorisé
+const ALL = "*";
+const ctxName = () => { const c = store.get("acc", ALL); return c === ALL || acct(c) ? c : ALL };
+// compte à utiliser quand une seule cible a du sens (écrire, calendrier, veille) : le compte choisi, sinon le premier
+const curAcc = () => { const c = ctxName(); return c === ALL ? S.accounts[0]?.name : c };
+const inCtx = n => { const c = ctxName(); return c === ALL || n === c };
+function ctxSelect(withAll, id = "ctx-acc") {
+  const cur = withAll ? ctxName() : curAcc();
+  return `<select id="${id}" data-ctx class="ctxsel" aria-label="Compte affiché">${withAll ? `<option value="${ALL}" ${cur === ALL ? "selected" : ""}>Tous les comptes</option>` : ""}${S.accounts.map(a => `<option value="${esc(a.name)}" ${a.name === cur ? "selected" : ""}>${isLI(a.name) ? "" : "@"}${esc(a.handle || a.name)}</option>`).join("")}</select>`;
+}
 const isLI = n => acct(n)?.platform === "linkedin";
 const maxLen = n => isLI(n) ? 3000 : acct(n)?.premium ? 4000 : 280;
 const LINES = ["perso", "kinflux", "allan-drdrt"];
@@ -282,10 +292,10 @@ const route = () => (location.hash.replace(/^#\/?/, "") || "home").split("/")[0]
 window.addEventListener("hashchange", () => S && render());
 
 function counts() {
-  const q = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p)).length;
-  const rp = S.posts.filter(p => p.status === "draft" && isHand(p)).length;
-  const w = (S.items || []).filter(i => i.status === "pending").length;
-  const cm = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && p.campaignId).length;
+  const q = S.posts.filter(p => inCtx(p.account) && (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p)).length;
+  const rp = S.posts.filter(p => inCtx(p.account) && p.status === "draft" && isHand(p)).length;
+  const w = (S.items || []).filter(i => inCtx(i.account) && i.status === "pending").length;
+  const cm = S.posts.filter(p => inCtx(p.account) && (p.status === "draft" || p.status === "failed") && p.campaignId).length;
   return { queue: q, watch: w, comments: cm, replies: rp };
 }
 
@@ -300,6 +310,7 @@ function render() {
   $("#root").innerHTML = `<div class="app">
     <aside class="side">
       <div class="brand"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span></div>
+      ${S.accounts.length > 1 ? `<div class="ctxbox"><label for="ctx-acc">Compte</label>${ctxSelect(true)}</div>` : ""}
       <nav class="nav">${routesShown().map(x => navItem(x)).join("")}</nav>
       <div class="grow"></div>
       <button class="aipill" data-go="settings">
@@ -309,7 +320,7 @@ function render() {
       <div class="sidefoot"><button class="btn ghost sm" data-act="theme" title="Thème : ${THEME_LABEL[themePref()]}" aria-label="Thème : ${THEME_LABEL[themePref()]}">${themeIcon()}</button><a class="btn ghost sm" href="${SOURCE_URL}" target="_blank" rel="noopener" title="Code source (AGPL-3.0)">Code source</a><span class="spacer"></span><button class="btn ghost sm" data-act="logout" title="Se déconnecter">${I.out}</button></div>
     </aside>
     <div>
-      <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span><button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
+      <div class="mtop"><span class="mark">${I.logo}</span><span class="brandword">XGrowth<span class="brand-sub">STUDIO</span></span><span class="spacer"></span>${S.accounts.length > 1 ? ctxSelect(true, "ctx-acc-m") : ""}<button class="btn ghost sm" data-go="settings">${esc(providerName(prov))}</button></div>
       <main class="main"><div class="wrap" id="view"></div></main>
     </div>
     <nav class="mnav">${routesShown().filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
@@ -426,16 +437,16 @@ function empty(icon, title, sub, cta) {
 }
 
 function accountSelect(id = "acc") {
-  const cur = store.get("acc", S.accounts[0]?.name);
+  const cur = curAcc();
   return `<select id="${id}" style="width:auto">${S.accounts.map(a => `<option value="${esc(a.name)}" ${a.name === cur ? "selected" : ""}>@${esc(a.handle || a.name)}</option>`).join("")}</select>`;
 }
 
 // ------------------------------------------------------------------ vues
 function vHome(v) {
   const now = Date.now(), d30 = now - 30 * 864e5, d7 = now + 7 * 864e5;
-  const pub = S.posts.filter(p => p.status === "published");
+  const pub = S.posts.filter(p => inCtx(p.account) && p.status === "published");
   const pub30 = pub.filter(p => new Date(p.publishedAt) > d30);
-  const planned = S.posts.filter(p => (p.status === "scheduled" || p.status === "validated" || p.status === "manual") && p.scheduledAt).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const planned = S.posts.filter(p => inCtx(p.account) && (p.status === "scheduled" || p.status === "validated" || p.status === "manual") && p.scheduledAt).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
   const views = pub30.reduce((s, p) => s + (p.metrics?.views || 0), 0);
   const withM = pub30.filter(p => p.metrics?.views);
   const eng = withM.length ? withM.reduce((s, p) => s + p.metrics.engagementRatePct, 0) / withM.length : 0;
@@ -443,7 +454,7 @@ function vHome(v) {
   const hour = new Date().getHours();
   const hello = hour < 6 ? "Bonne nuit" : hour < 18 ? "Bonjour" : "Bonsoir";
   const next = planned[0];
-  const drafts = S.posts.filter(p => p.status === "draft" && !isHand(p)).slice(-3).reverse();
+  const drafts = S.posts.filter(p => inCtx(p.account) && p.status === "draft" && !isHand(p)).slice(-3).reverse();
   v.innerHTML = `<div class="head home-head"><div><div class="eyebrow">✦ Votre espace de croissance</div><h1>${hello}${who() ? " " + esc(who()) : ""} 👋</h1><p>${c.queue ? `<b>${c.queue}</b> brouillon${c.queue > 1 ? "s" : ""} attend${c.queue > 1 ? "ent" : ""} votre validation.` : "Votre file est vide : c'est le moment de créer."}</p></div>
       <a class="btn primary" href="#/compose">${I.spark} Créer avec l'IA</a></div>
     <div class="kpis">
@@ -476,7 +487,6 @@ function sparkline(posts) {
 // Les heures viennent toujours de la programmation des comptes : réordonner
 // redistribue les heures déjà calculées, déposer sur un jour prend le premier
 // créneau libre de ce jour, déposer un brouillon le valide (signé) à cet endroit.
-const dayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 function queueTile(p) {
   const drag = p.status === "scheduled" && !p.campaignId;
@@ -524,6 +534,28 @@ function bindDnD(root) {
   });
 }
 
+// déplacement sans souris : le serveur choisit l'heure selon la programmation du compte
+async function moveToDay(id, day, delta) {
+  const to = TZ.addDays(day, delta);
+  try { await run(null, () => api(`/api/posts/${id}/move`, { day: to }), r => `Reprogrammé ${fmtDate(r.scheduledAt)}`) } catch {}
+  $(`.ev[data-id="${id}"]`)?.focus();
+}
+async function moveInQueue(id, delta) {
+  const list = $("[data-dropqueue]");
+  const ids = $$(":scope > [data-drag=planned]", list || document).map(el => el.dataset.id), i = ids.indexOf(id), j = i + delta;
+  if (!list || i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  try { await run(null, () => api("/api/schedule/reorder", { ids }), "Nouvel ordre enregistré : les heures suivent la programmation") } catch {}
+  $(`.qrow[data-id="${id}"]`)?.focus();
+}
+document.addEventListener("keydown", e => {
+  const el = e.target.closest?.("[data-drag=planned][tabindex]");
+  if (!el || e.target !== el || e.altKey || e.ctrlKey || e.metaKey) return;
+  const k = e.key;
+  if ((k === "ArrowLeft" || k === "ArrowRight") && el.dataset.day) { e.preventDefault(); moveToDay(el.dataset.id, el.dataset.day, k === "ArrowLeft" ? -1 : 1) }
+  else if ((k === "ArrowUp" || k === "ArrowDown") && el.classList.contains("qrow")) { e.preventDefault(); moveInQueue(el.dataset.id, k === "ArrowUp" ? -1 : 1) }
+});
+
 async function dropOnQueue(list, d, before) {
   if (d.kind === "draft") {
     let by = who();
@@ -544,7 +576,7 @@ function composerBox(ctx) {
   if (!S.accounts.length) return empty(I.gear, "Aucun compte", "Ajoutez un compte X dans les réglages.", `<a class="btn primary" href="#/settings">Réglages</a>`);
   return `<div class="composer glow"><textarea id="brief-${ctx}" placeholder="De quoi voulez-vous parler ? Un sujet, une anecdote, une idée en vrac… (vide = idées originales)">${esc(store.get("brief", ""))}</textarea>
     <div class="bar">${accountSelect("acc-" + ctx)}
-      <select id="type-${ctx}" style="width:auto" class="${typesFor(acct(store.get("acc", S.accounts[0]?.name))).length ? "" : "hidden"}" title="Type de post">${typeOptions(store.get("acc", S.accounts[0]?.name))}</select>
+      <select id="type-${ctx}" style="width:auto" class="${typesFor(acct(curAcc())).length ? "" : "hidden"}" title="Type de post">${typeOptions(curAcc())}</select>
       <div class="seg" id="n-${ctx}">${[1, 3, 5].map(n => `<button data-n="${n}" class="${n === +store.get("n", 3) ? "on" : ""}">${n}</button>`).join("")}</div>
       <span class="small muted">brouillon(s) par ${esc(providerName(S.ai?.provider))}</span><span class="spacer"></span>
       <button class="btn primary" data-act="generate" data-ctx="${ctx}">${I.spark} Générer</button></div></div>
@@ -559,6 +591,7 @@ function bindComposer(v, ctx) {
   $$(`#n-${ctx} button`, v).forEach(b => b.onclick = () => { store.set("n", b.dataset.n); $$(`#n-${ctx} button`, v).forEach(x => x.classList.toggle("on", x === b)) });
   $("#acc-" + ctx, v).onchange = e => {
     store.set("acc", e.target.value);
+    $$("[data-ctx]").forEach(x => { x.value = e.target.value });
     const sel = $("#type-" + ctx, v);
     sel.innerHTML = typeOptions(e.target.value);
     sel.classList.toggle("hidden", !typesFor(acct(e.target.value)).length);
@@ -580,7 +613,7 @@ function lineFilter() {
 
 function vQueue(v) {
   const lf = store.get("lineFilter", "");
-  const ps = S.posts.filter(p => (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p) && (!lf || p.line === lf)).slice().reverse();
+  const ps = S.posts.filter(p => inCtx(p.account) && (p.status === "draft" || p.status === "failed") && !p.campaignId && !isHand(p) && (!lf || p.line === lf)).slice().reverse();
   v.innerHTML = `<div class="head"><div><h1>À valider</h1><p>Relisez, retouchez, validez. Rien ne part sur X ni sur LinkedIn sans votre feu vert.</p></div>
     <div class="row">${lineFilter()}<span class="small muted">Validé par</span><input id="who" value="${esc(who())}" placeholder="Votre nom" style="width:150px"></div></div>
     ${ps.length ? ps.map(p => tweetCard(p, "edit")).join("") : empty(I.check, "Tout est validé", "Aucun brouillon en attente.", `<a class="btn primary" href="#/compose">${I.spark} Créer des posts</a>`)}`;
@@ -615,7 +648,7 @@ const IDEA_STATUS = { proposed: ["Proposée", "warn"], kept: ["Retenue", "ok"], 
 function ideaBank() {
   const accs = S.accounts.filter(a => a.ideas?.enabled || (S.ideas || []).some(i => i.account === a.name));
   if (!accs.length) return `<h2>Banque d'idées</h2><div class="card"><p class="small muted" style="margin:0">L'IA peut vous proposer des idées de posts originaux (angle et intérêt pour votre audience), que vous retenez ou écartez avant de les faire rédiger. Activez « Proposer des idées de posts originaux » dans Réglages › votre compte › Affiner l'IA.</p></div>`;
-  const cur = accs.find(a => a.name === store.get("acc", "")) || accs[0];
+  const cur = accs.find(a => a.name === ctxName()) || accs.find(a => a.name === curAcc()) || accs[0];
   const ideas = (S.ideas || []).filter(i => accs.some(a => a.name === i.account) && i.status !== "dismissed").slice().reverse();
   const open = ideas.filter(i => i.status !== "drafted"), done = ideas.filter(i => i.status === "drafted").slice(0, 6);
   const card = i => `<div class="idea"><div class="row"><b style="flex:1">${esc(i.title)}</b><span class="pill ${IDEA_STATUS[i.status][1]}">${IDEA_STATUS[i.status][0]}</span></div>
@@ -629,19 +662,27 @@ function ideaBank() {
 }
 
 function vCalendar(v) {
-  const off = +store.get("weekOff", 0);
-  const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() + off * 7);
-  const days = [...Array(7)].map((_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d });
-  const lf = store.get("lineFilter", ""), byLine = p => !lf || p.line === lf;
-  const evs = S.posts.filter(p => byLine(p) && ["scheduled", "validated", "publishing", "manual", "published"].includes(p.status)).map(p => ({ p, t: new Date(p.status === "published" ? p.publishedAt : p.scheduledAt) }));
-  const sameDay = (a, b) => a.toDateString() === b.toDateString();
-  const planned = S.posts.filter(p => byLine(p) && (p.status === "scheduled" || p.status === "validated" || p.status === "manual")).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
-  v.innerHTML = `<div class="head"><div><h1>Calendrier</h1><p>${planned.length} post${planned.length > 1 ? "s" : ""} planifié${planned.length > 1 ? "s" : ""}.</p></div>
-    <div class="row">${lineFilter()}<button class="btn sm" data-act="week" data-d="-1">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
-    <div class="week">${days.map(d => `<div class="day ${sameDay(d, new Date()) ? "today" : ""}" data-dropday="${dayKey(d)}"><div class="d">${d.toLocaleDateString("fr-FR", { weekday: "short" })}<b>${d.getDate()}</b></div>
-      ${evs.filter(e => sameDay(e.t, d)).sort((a, b) => a.t - b.t).map(e => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${e.p.status === "scheduled" && !e.p.campaignId ? ` draggable="true" data-drag="planned" data-id="${e.p.id}"` : ""}><div class="t">${e.t.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} · ${isLI(e.p.account) ? "" : "@"}${esc(handleOf(e.p.account))} ${linePill(e.p)}</div><div class="x">${esc(e.p.text)}</div></div>`).join("")}</div>`).join("")}</div>
-    <h2>File de publication</h2>${planned.length ? `<p class="hint" style="margin-top:-6px">Glissez un post sur un jour pour le caler au premier créneau libre de ce jour, ou dans la file pour changer l'ordre.</p>
-      <div data-dropqueue>${planned.map(p => p.status === "scheduled" && !p.campaignId ? `<div draggable="true" data-drag="planned" data-id="${p.id}">${tweetCard(p, "planned")}</div>` : tweetCard(p, "planned")).join("")}</div>` : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
+  // un calendrier = un compte : les jours et les heures sont ceux de son fuseau (celui que le serveur utilise pour programmer)
+  const a = acct(curAcc());
+  if (!a) return v.innerHTML = `<div class="head"><div><h1>Calendrier</h1></div></div>${empty(I.gear, "Aucun compte", "Ajoutez un compte dans les réglages.", `<a class="btn primary" href="#/settings">Réglages</a>`)}`;
+  const zone = TZ.zoneOf(a), off = +store.get("weekOff", 0);
+  const today = TZ.dayKeyIn(Date.now(), zone), days = TZ.weekDays(today, off);
+  const lf = store.get("lineFilter", ""), mine = p => p.account === a.name && (!lf || p.line === lf);
+  const evs = S.posts.filter(p => mine(p) && ["scheduled", "validated", "publishing", "manual", "published"].includes(p.status))
+    .map(p => { const t = p.status === "published" ? p.publishedAt : p.scheduledAt; return { p, t: new Date(t), day: TZ.dayKeyIn(t, zone) } });
+  const planned = S.posts.filter(p => mine(p) && (p.status === "scheduled" || p.status === "validated" || p.status === "manual")).sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const movable = p => p.status === "scheduled" && !p.campaignId;
+  const ev = (e, i) => `<div class="ev ${e.p.status === "published" ? "pub" : ""}" title="${esc(e.p.text)}"${movable(e.p) ? ` draggable="true" data-drag="planned" data-id="${e.p.id}" data-day="${e.day}" tabindex="0" aria-label="Post de ${TZ.timeIn(e.t, zone)} : flèches gauche et droite pour changer de jour"` : ""}><div class="t">${TZ.timeIn(e.t, zone)} · ${isLI(e.p.account) ? "" : "@"}${esc(handleOf(e.p.account))} ${linePill(e.p)}</div><div class="x">${esc(e.p.text)}</div>
+    ${movable(e.p) ? `<div class="evmv"><button class="btn sm ghost" data-act="ev-move" data-id="${e.p.id}" data-day="${e.day}" data-d="-1" aria-label="Déplacer au jour précédent" title="Jour précédent">${I.arrowL}</button><button class="btn sm ghost" data-act="ev-move" data-id="${e.p.id}" data-day="${e.day}" data-d="1" aria-label="Déplacer au jour suivant" title="Jour suivant">${I.arrowR}</button></div>` : ""}</div>`;
+  const q = (p, i) => p.status === "scheduled" && !p.campaignId
+    ? `<div draggable="true" data-drag="planned" data-id="${p.id}" tabindex="0" class="qrow" aria-label="Post planifié : flèches haut et bas pour changer l'ordre">${tweetCard(p, "planned")}<div class="qmv"><button class="btn sm ghost" data-act="q-move" data-id="${p.id}" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="Monter dans la file">↑ Monter</button><button class="btn sm ghost" data-act="q-move" data-id="${p.id}" data-d="1" ${i === planned.length - 1 ? "disabled" : ""} aria-label="Descendre dans la file">↓ Descendre</button></div></div>`
+    : tweetCard(p, "planned");
+  v.innerHTML = `<div class="head"><div><h1>Calendrier</h1><p>${planned.length} post${planned.length > 1 ? "s" : ""} planifié${planned.length > 1 ? "s" : ""} pour ${isLI(a.name) ? "" : "@"}${esc(a.handle || a.name)}. <span class="tzlabel" title="Les jours et les heures suivent le fuseau du compte, pas celui de votre navigateur">Heures : ${esc(TZ.zoneLabel(zone))}${zone !== TZ.browserZone() ? ` · votre navigateur : ${esc(TZ.zoneLabel(TZ.browserZone()))}` : ""}</span></p></div>
+    <div class="row">${S.accounts.length > 1 ? ctxSelect(false, "cal-acc") : ""}${lineFilter()}<button class="btn sm" data-act="week" data-d="-1" aria-label="Semaine précédente">${I.arrowL}</button><button class="btn sm" data-act="week" data-d="0">Cette semaine</button><button class="btn sm" data-act="week" data-d="1" aria-label="Semaine suivante">${I.arrowR}</button><button class="btn sm" data-act="publish-due">${I.send} Publier ce qui est dû</button></div></div>
+    <div class="week">${days.map(k => `<div class="day ${k === today ? "today" : ""}" data-dropday="${k}"><div class="d">${TZ.dayLabel(k)}<b>${TZ.dayNum(k)}</b></div>
+      ${evs.filter(e => e.day === k).sort((x, y) => x.t - y.t).map(ev).join("")}</div>`).join("")}</div>
+    <h2>File de publication</h2>${planned.length ? `<p class="hint" style="margin-top:-6px">Glissez un post sur un jour pour le caler au premier créneau libre de ce jour, ou dans la file pour changer l'ordre. Au clavier ou sur mobile : les boutons ‹ › d'un post changent son jour, ↑ ↓ changent son rang dans la file.</p>
+      <div data-dropqueue>${planned.map(q).join("")}</div>` : empty(I.cal, "Rien de planifié", "Les posts validés apparaissent ici.")}`;
   bindDnD(v);
 }
 
@@ -657,10 +698,10 @@ function vWatch(v) {
     api("/api/watch/seen", {}).then(r => { if (S) S.settings.watchSeenAt = r.watchSeenAt }).catch(() => {});
   }
   const f = store.get("wf", "pending");
-  const fresh = (S.items || []).filter(i => i.status === "pending" && isNew(i)).length;
-  const filtered = (S.items || []).filter(i => f === "all" || i.status === f);
+  const fresh = (S.items || []).filter(i => inCtx(i.account) && i.status === "pending" && isNew(i)).length;
+  const filtered = (S.items || []).filter(i => inCtx(i.account) && (f === "all" || i.status === f));
   const items = f === "pending" ? sortItems(filtered) : filtered.slice().reverse();
-  const targets = S.accounts.flatMap(a => (a.watch || []).map(w => ({ ...w, account: a.name })));
+  const targets = S.accounts.filter(a => inCtx(a.name)).flatMap(a => (a.watch || []).map(w => ({ ...w, account: a.name })));
   const lab = { pending: "À trier", kept: "Gardés", drafted: "Rédigés", ignored: "Ignorés", all: "Tout" };
   v.innerHTML = `<div class="head"><div><h1>Veille${fresh ? ` <span class="pill new" title="Récupérés depuis votre dernière visite">${fresh} nouveau${fresh > 1 ? "x" : ""}</span>` : ""}</h1><p>Les comptes et recherches que vous suivez. L'IA trie, vous choisissez quoi en faire.</p></div>
     <div class="row"><button class="btn sm" data-act="fetch">${I.refresh} Actualiser</button><button class="btn sm" data-act="bookmarks">Importer mes signets</button><button class="btn primary sm" data-act="triage">${I.spark} Trier avec l'IA</button></div></div>
@@ -710,7 +751,7 @@ function itemCard(i) {
 }
 
 function vPublished(v) {
-  const ps = S.posts.filter(p => p.status === "published").sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  const ps = S.posts.filter(p => inCtx(p.account) && p.status === "published").sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
   const withM = ps.filter(p => p.metrics);
   const tot = k => withM.reduce((s, p) => s + (p.metrics[k] || 0), 0);
   const top = withM.slice().sort((a, b) => b.metrics.engagementRatePct - a.metrics.engagementRatePct).slice(0, 3);
@@ -1134,10 +1175,12 @@ const actions = {
   async "mark-published"(b) { const url = (prompt("Lien du post LinkedIn (facultatif) :") || "").trim(); await run(b, () => api(`/api/posts/${b.dataset.id}/mark-published`, { url }), "Marqué comme publié") },
   async unschedule(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/unschedule`, {}), "Renvoyé en brouillon") },
   async "publish-due"(b) { await run(b, () => api("/api/publish-due", {}), r => r.length ? `${r.length} post(s) traité(s)` : "Rien n'était dû") },
+  async "ev-move"(b) { await moveToDay(b.dataset.id, b.dataset.day, +b.dataset.d) },
+  async "q-move"(b) { await moveInQueue(b.dataset.id, +b.dataset.d) },
   async week(b) { const d = +b.dataset.d; store.set("weekOff", d === 0 ? 0 : +store.get("weekOff", 0) + d); render() },
   async "mk-reply"(b) { await mkReply(b, false) },
   async "mk-quote"(b) { await mkReply(b, true) },
-  async manual(b) { await run(b, () => api("/api/write", { account: store.get("acc", S.accounts[0]?.name), text: $("#manual").value, media: $("#media").value }), "Ajouté à la file") },
+  async manual(b) { await run(b, () => api("/api/write", { account: curAcc(), text: $("#manual").value, media: $("#media").value }), "Ajouté à la file") },
   async fetch(b) { await run(b, () => api("/api/fetch", {}), r => r.length ? r.map(x => x.error ? `${x.source} : ${x.error}` : `${x.source.replace("watch:", "")} +${x.added}`).join(" · ") : "Aucune cible suivie", { wait: "Lecture…" }) },
   async bookmarks(b) { await run(b, () => api("/api/bookmarks", { account: $("#wacc").value, n: 20 }), r => `${r.added} signet(s) importé(s)`) },
   async triage(b) { await run(b, () => api("/api/triage", { account: $("#wacc").value }), r => r.map(x => x.error || (x.triaged ? `${x.triaged} contenu(s) noté(s), ${x.kept} suggéré(s)` : "Tout est déjà noté")).join(" · ") || "Rien à trier", { wait: "Tri…" }) },
@@ -1295,7 +1338,7 @@ async function doValidate(b, extra) {
 async function mkReply(b, quote) {
   const ref = $("#ref").value.trim();
   if (!ref) return toast("Collez d'abord le lien du post", true);
-  await run(b, () => api("/api/reply", { account: store.get("acc", S.accounts[0]?.name), ref, quote }), quote ? "Citation ajoutée à « À valider »" : "Réponse ajoutée à « À valider »", { wait: "Écriture…" });
+  await run(b, () => api("/api/reply", { account: curAcc(), ref, quote }), quote ? "Citation ajoutée à « À valider »" : "Réponse ajoutée à « À valider »", { wait: "Écriture…" });
 }
 
 function aiTestResult(r) {
@@ -1304,6 +1347,8 @@ function aiTestResult(r) {
 }
 
 document.addEventListener("change", async e => {
+  const cx = e.target.closest("[data-ctx]");
+  if (cx) { store.set("acc", cx.value); render(); return }
   const sel = e.target.closest("[data-line]");
   if (sel) { try { await run(null, () => api(`/api/posts/${sel.dataset.line}/line`, { line: sel.value }), "Ligne changée : validation remise à zéro") } catch {} return }
   const lf = e.target.closest("[data-line-filter]");
@@ -1519,8 +1564,8 @@ const wizard = {
 function vReplies(v) {
   const lis = (S.accounts || []).filter(a => a.platform === "linkedin");
   if (!lis.length) return v.innerHTML = `<div class="head"><div><h1>Réponses</h1></div></div>${empty(I.reply, "Aucun compte LinkedIn", "Ajoutez un compte LinkedIn dans les réglages.")}`;
-  const cur = store.get("liReplyAcc", lis[0].name), f = store.get("rf", "todo"), mode = store.get("rmode", "reply");
-  const all = S.posts.filter(p => isHand(p)).slice().reverse();
+  const cur = lis.some(a => a.name === ctxName()) ? ctxName() : store.get("liReplyAcc", lis[0].name), f = store.get("rf", "todo"), mode = store.get("rmode", "reply");
+  const all = S.posts.filter(p => inCtx(p.account) && isHand(p)).slice().reverse();
   const lists = { todo: all.filter(p => p.status === "draft"), done: all.filter(p => p.status === "handled"), out: all.filter(p => p.status === "rejected") };
   v.innerHTML = `<div class="head"><div><h1>Réponses LinkedIn</h1><p>Collez un commentaire reçu ou le post d'un autre : l'IA rédige un brouillon dans votre voix. Rien n'est lu ni envoyé sur LinkedIn : vous copiez le texte et le postez vous-même.</p></div></div>
     <div class="card">
@@ -1539,14 +1584,14 @@ function vReplies(v) {
 }
 
 function vComments(v) {
-  const camps = S.campaigns || [], stats = S.campaignStats || {}, f = store.get("cf", "todo");
-  const replies = S.posts.filter(p => p.campaignId).slice().reverse();
+  const camps = (S.campaigns || []).filter(c => inCtx(c.account)), stats = S.campaignStats || {}, f = store.get("cf", "todo");
+  const replies = S.posts.filter(p => inCtx(p.account) && p.campaignId).slice().reverse();
   const lists = {
     todo: replies.filter(p => p.status === "draft" || p.status === "failed"),
     sent: replies.filter(p => ["published", "scheduled", "validated", "publishing"].includes(p.status)),
     out: replies.filter(p => p.status === "rejected"),
   };
-  const dismissed = (S.candidates || []).filter(c => c.status === "dismissed");
+  const dismissed = (S.candidates || []).filter(c => c.status === "dismissed" && inCtx(S.campaigns?.find(x => x.id === c.campaignId)?.account ?? ctxName()));
   const campName = id => camps.find(c => c.id === id)?.name || "campagne supprimée";
   const body = f === "out"
     ? (lists.out.length || dismissed.length ? `${lists.out.map(p => tweetCard(p, "view")).join("")}

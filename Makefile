@@ -9,6 +9,7 @@ build:
 test:
 	go vet ./...
 	go test ./...
+	@if command -v node >/dev/null 2>&1; then node web/tz.test.js; else echo "node absent : tests JS (fuseaux) ignorés"; fi
 
 release:
 	mkdir -p dist

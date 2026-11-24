@@ -6,6 +6,20 @@ dernière version.
 
 ## Non publié
 
+### Ajouté
+- **Compte actif, partout** : un sélecteur de compte (barre latérale, en-tête sur mobile) mémorisé dans le navigateur.
+  Accueil, À valider, Veille, Performances, Commentaires et Réponses ne montrent que le compte choisi, ou
+  « Tous les comptes ». Créer et Calendrier travaillent toujours sur un seul compte.
+- **Déplacer sans souris** : sur le calendrier, boutons ‹ › (et flèches gauche/droite sur un post sélectionné)
+  pour changer de jour, boutons ↑ ↓ (et flèches haut/bas) pour changer l'ordre dans la file. Le glisser-déposer reste.
+- Tests : `web/tz.test.js` (lancé par `make test` si Node est présent) et tests Go sur les changements d'heure.
+
+### Corrigé
+- **Calendrier dans le fuseau du compte** : les jours et les heures étaient calculés avec le fuseau du navigateur
+  alors que le serveur programme dans celui du compte. Le fuseau du compte (et celui du navigateur s'il diffère)
+  est affiché au-dessus de la semaine.
+- **Semaine du lundi au dimanche** : elle commençait au jour courant.
+
 ### Corrigé
 - **Brouillons, enregistrement sûr** : « Enregistrer » sans modification n'envoie plus rien (il envoyait une chaîne
   vide qui effaçait le texte). Le serveur refuse un texte vide sur un brouillon non vide, sauf effacement explicite
