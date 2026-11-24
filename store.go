@@ -163,6 +163,8 @@ type Post struct {
 	// MetricsCatchUps : relevés de rattrapage tentés après la fenêtre normale
 	// (voir RefreshMetrics). Plafonné par metricsCatchUpMax : jamais de boucle.
 	MetricsCatchUps int `json:"metricsCatchUps,omitempty"`
+	// MetricsCatchUpAt : date de la dernière tentative de rattrapage (espacement).
+	MetricsCatchUpAt time.Time `json:"metricsCatchUpAt,omitempty"`
 
 	// LinkedIn : contrôle anti-tics d'IA, obligatoire avant la validation. Il
 	// porte sur le texte courant (empreinte) et tombe à la moindre modification.
@@ -309,8 +311,11 @@ type Data struct {
 	Ideas []*Idea `json:"ideas,omitempty"`
 	// suivi quotidien des abonnés (comptes dont le backend les renvoie)
 	Followers []FollowerSample `json:"followers,omitempty"`
-	Log       []LogEntry       `json:"log"`
-	Auth      Auth             `json:"auth"`
+	// FollowersTriedAt : dernière tentative de relevé des abonnés par compte
+	// (réussie ou non), pour ne pas rappeler le backend en boucle en cas d'échec.
+	FollowersTriedAt map[string]time.Time `json:"followersTriedAt,omitempty"`
+	Log              []LogEntry           `json:"log"`
+	Auth             Auth                 `json:"auth"`
 }
 
 func defaultSettings() Settings {

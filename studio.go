@@ -1303,6 +1303,8 @@ const (
 	// metricsCatchUpMax : tentatives de rattrapage par post (réussies ou non).
 	// Une mesure tardive réussie met fin au rattrapage ; l'échec s'arrête au plafond.
 	metricsCatchUpMax = 2
+	// metricsCatchUpGap : délai minimal entre deux tentatives de rattrapage d'un post.
+	metricsCatchUpGap = 6 * time.Hour
 )
 
 // hasLateMetrics : le post a une mesure assez tardive (perfMinAge après la
@@ -1327,6 +1329,14 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 			if hasLateMetrics(p) || p.MetricsCatchUps >= metricsCatchUpMax {
 				continue
 			}
+			// tentatives espacées : au moins max(maxAge, metricsCatchUpGap)
+			gap := metricsCatchUpGap
+			if maxAge > gap {
+				gap = maxAge
+			}
+			if !p.MetricsCatchUpAt.IsZero() && s.now().Sub(p.MetricsCatchUpAt) < gap {
+				continue
+			}
 			catchUp = true
 		}
 		if p.Metrics != nil && s.now().Sub(p.Metrics.UpdatedAt) < maxAge {
@@ -1348,6 +1358,7 @@ func (s *Studio) RefreshMetrics(ctx context.Context, maxAge time.Duration) (int,
 			_ = s.store.Update(func(d *Data) error {
 				if x := d.Post(id); x != nil {
 					x.MetricsCatchUps++
+					x.MetricsCatchUpAt = s.now().UTC()
 				}
 				return nil
 			})

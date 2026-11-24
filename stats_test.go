@@ -81,12 +81,30 @@ func TestCatchUpIsBoundedOnFailure(t *testing.T) {
 	addPublished(t, e, "old", 30*24*time.Hour, nil, nil)
 	for i := 0; i < 6; i++ {
 		_, _ = e.st.RefreshMetrics(context.Background(), 0)
+		e.now = e.now.Add(metricsCatchUpGap + time.Minute)
 	}
 	if x.tweetCalls != metricsCatchUpMax {
 		t.Fatalf("%d tentatives, attendu %d", x.tweetCalls, metricsCatchUpMax)
 	}
 	if got := e.st.store.Snapshot().Post("old").MetricsCatchUps; got != metricsCatchUpMax {
 		t.Fatalf("compteur %d", got)
+	}
+}
+
+func TestCatchUpAttemptsAreSpaced(t *testing.T) {
+	e, x := statsEnv(t)
+	x.tweetErr = errors.New("indisponible")
+	addPublished(t, e, "old", 30*24*time.Hour, nil, nil)
+	for i := 0; i < 3; i++ {
+		_, _ = e.st.RefreshMetrics(context.Background(), 0)
+	}
+	if x.tweetCalls != 1 {
+		t.Fatalf("%d appels rapprochés, attendu 1", x.tweetCalls)
+	}
+	e.now = e.now.Add(metricsCatchUpGap + time.Minute)
+	_, _ = e.st.RefreshMetrics(context.Background(), 0)
+	if x.tweetCalls != 2 {
+		t.Fatalf("%d appels après le délai, attendu 2", x.tweetCalls)
 	}
 }
 
@@ -234,6 +252,43 @@ func TestStatsCompareByFormatAndOrigin(t *testing.T) {
 	}
 	if v.Note == "" {
 		t.Fatal("note manquante")
+	}
+}
+
+type failingMeX struct {
+	countingX
+	meCalls int
+	count   int
+}
+
+func (f *failingMeX) Me(context.Context) (*Profile, error) {
+	f.meCalls++
+	if f.count < 0 {
+		return nil, errors.New("indisponible")
+	}
+	return &Profile{FollowersCount: f.count}, nil
+}
+
+func TestFollowersRetryIsThrottled(t *testing.T) {
+	for _, count := range []int{-1, 0} { // erreur, puis nombre non renvoyé
+		e := newEnv(t)
+		x := &failingMeX{count: count}
+		e.st.backendFor = func(*Account) (XBackend, error) { return x, nil }
+		acc := e.st.store.Snapshot().Account("main")
+		acc.Backend = "agentx"
+		_ = e.st.SaveAccount(acc)
+		ctx := context.Background()
+		for i := 0; i < 4; i++ {
+			_, _ = e.st.RecordFollowers(ctx)
+		}
+		if x.meCalls != 1 {
+			t.Fatalf("count=%d : %d appels dans l'heure, attendu 1", count, x.meCalls)
+		}
+		e.now = e.now.Add(followersRetryGap + time.Minute)
+		_, _ = e.st.RecordFollowers(ctx)
+		if x.meCalls != 2 {
+			t.Fatalf("count=%d : %d appels après le délai, attendu 2", count, x.meCalls)
+		}
 	}
 }
 

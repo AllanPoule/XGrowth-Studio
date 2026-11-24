@@ -23,9 +23,9 @@ dernière version.
   la date du dernier relevé de chaque mesure. Une donnée absente s'affiche « indisponible », jamais 0 (vues non
   renvoyées par le backend, post jamais relevé, LinkedIn) ; un vrai zéro mesuré reste 0. Les comparaisons sont
   descriptives et ne disent rien des causes. Le relevé rattrape les posts de plus de 14 jours qui n'ont aucune
-  mesure tardive (au moins 48 h après la publication) : au plus 2 tentatives par post, comptées même en cas d'échec.
+  mesure tardive (au moins 48 h après la publication) : au plus 2 tentatives par post, comptées même en cas d'échec et espacées d'au moins 6 h.
   Suivi quotidien des abonnés (un relevé par jour et par compte) pour les backends agentx et xapi ; « indisponible »
-  pour les autres et tant que le backend ne renvoie pas le nombre. Nouvelle route : `GET /api/stats?account=&days=`.
+  pour les autres et tant que le backend ne renvoie pas le nombre (au plus une tentative par heure et par compte, même en cas d'échec). Nouvelle route : `GET /api/stats?account=&days=`.
 - **Visuels déposés depuis le navigateur** : on glisse ou on choisit une image (le sélecteur marche sur mobile), avec
   aperçu, texte alternatif (LinkedIn), remplacement et retrait, au lieu de saisir un chemin de fichier du serveur.
   Le serveur contrôle le contenu réel (en-tête de l'image et type MIME détecté, pas l'extension), la taille et les

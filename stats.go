@@ -15,6 +15,9 @@ import (
 
 const followersKeepDays = 400
 
+// followersRetryGap : au plus une tentative de relevé des abonnés par heure et par compte.
+const followersRetryGap = time.Hour
+
 // StatsFilter : compte (vide = tous) et période en jours (0 = tout l'historique).
 type StatsFilter struct {
 	Account string
@@ -302,6 +305,18 @@ func (s *Studio) RecordFollowers(ctx context.Context) (int, error) {
 		if done {
 			continue
 		}
+		if t, ok := d.FollowersTriedAt[a.Name]; ok && s.now().Sub(t) < followersRetryGap {
+			continue // tentative récente (réussie ou non) : pas de nouvel appel
+		}
+		// la tentative est mémorisée AVANT l'appel
+		name := a.Name
+		_ = s.store.Update(func(d *Data) error {
+			if d.FollowersTriedAt == nil {
+				d.FollowersTriedAt = map[string]time.Time{}
+			}
+			d.FollowersTriedAt[name] = s.now().UTC()
+			return nil
+		})
 		be, err := s.backendFor(a)
 		if err != nil {
 			lastErr = err
@@ -316,7 +331,7 @@ func (s *Studio) RecordFollowers(ctx context.Context) (int, error) {
 			lastErr = errors.New("nombre d'abonnés non renvoyé par le backend")
 			continue
 		}
-		name, count := a.Name, me.FollowersCount
+		count := me.FollowersCount
 		_ = s.store.Update(func(d *Data) error {
 			d.Followers = append(d.Followers, FollowerSample{Account: name, Day: day, Count: count, At: s.now().UTC()})
 			cut := s.now().Add(-followersKeepDays * 24 * time.Hour)
