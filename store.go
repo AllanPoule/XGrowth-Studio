@@ -141,6 +141,7 @@ type Post struct {
 	AIText      string     `json:"aiText,omitempty"`      // dernier texte écrit par l'IA (pour apprendre des corrections)
 	IdeaID      string     `json:"ideaId,omitempty"`      // idée de la banque dont le post est tiré
 	History     []Revision `json:"history,omitempty"`
+	Version     int        `json:"version,omitempty"` // +1 à chaque changement du texte : sert à refuser une écriture périmée
 	Metrics     *Metrics   `json:"metrics,omitempty"`
 
 	// LinkedIn : contrôle anti-tics d'IA, obligatoire avant la validation. Il

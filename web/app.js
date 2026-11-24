@@ -48,7 +48,43 @@ const SOURCE_URL = "https://github.com/AllanPoule/XGrowth-Studio";
 // ------------------------------------------------------------------ état
 let S = null;            // état serveur
 let P = null;            // fournisseurs d'IA détectés
-const edits = {};        // textes modifiés non enregistrés
+// textes modifiés non enregistrés, gardés dans le navigateur (un par brouillon) jusqu'à l'enregistrement
+const EDIT_KEY = "xg.edit.";
+const edits = new Proxy({}, {
+  set(o, id, v) {
+    o[id] = v;
+    try { if (v === undefined) localStorage.removeItem(EDIT_KEY + id); else localStorage.setItem(EDIT_KEY + id, JSON.stringify({ text: v, base: S?.posts.find(x => x.id === id)?.version || 0 })) } catch {}
+    return true;
+  },
+  deleteProperty(o, id) { delete o[id]; try { localStorage.removeItem(EDIT_KEY + id) } catch {} return true },
+});
+let editsRestored = false;
+function restoreEdits() {
+  if (editsRestored || !S) return;
+  editsRestored = true;
+  let changed = false;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(EDIT_KEY)) continue;
+      const id = k.slice(EDIT_KEY.length), p = S.posts.find(x => x.id === id);
+      let v; try { v = JSON.parse(localStorage.getItem(k)) } catch {}
+      if (!p || !v || typeof v.text !== "string" || v.text === p.text) { localStorage.removeItem(k); continue }
+      edits[id] = v.text;
+      changed = true;
+      if ((p.version || 0) !== (v.base || 0)) setTimeout(() => toast("Un brouillon a changé sur le serveur depuis votre dernière modification : votre texte non enregistré est conservé, vérifiez-le avant d'enregistrer", true), 300);
+    }
+  } catch {}
+  if (changed) render();
+}
+// enregistre le texte modifié d'un brouillon ; sans modification réelle, n'envoie rien
+async function pushEdit(id) {
+  const t = edits[id], p = S.posts.find(x => x.id === id);
+  if (t === undefined || (p && t === p.text)) { delete edits[id]; return null }
+  const r = await api(`/api/posts/${id}/edit`, { text: t, version: p?.version || 0, clear: t.trim() === "" });
+  delete edits[id];
+  return r;
+}
 let busy = false;
 let dirty = false;       // formulaire modifié et pas encore enregistré : pas de rafraîchissement automatique
 document.addEventListener("input", e => { if (e.target.closest("#view")) dirty = true });
@@ -255,6 +291,7 @@ function counts() {
 
 function render() {
   if (!S) return;
+  restoreEdits();
   dirty = false;
   const r = route(), c = counts();
   if (r !== "watch") watchBaseline = undefined;
@@ -307,9 +344,35 @@ function tweetCard(p, mode) {
       ${p.visualBrief && (editable || mode === "planned") ? `<div class="tw-why">${I.image}<span><b>Idée de visuel :</b> ${esc(p.visualBrief)}</span></div>` : ""}
       ${(p.warnings || []).map(w => `<div class="tw-why">${I.alert.replace("<svg", '<svg style="width:14px;height:14px;vertical-align:-2px"')}<span><b>Avertissement :</b> ${esc(w)}</span></div>`).join("")}
       ${li && mode === "edit" ? liTools(p) : ""}
+      ${editable ? historyHTML(p) : ""}
       ${p.error ? `<div class="tw-err">${esc(p.error)}</div>` : ""}
       ${mode === "hand" ? handActions(p) : mode === "edit" ? queueActions(p) : mode === "planned" ? `<div class="tw-actions"><span class="spacer"></span>${p.status === "manual" ? `<button class="btn sm primary" data-act="mark-published" data-id="${p.id}">Marquer comme publié</button>` : ""}${li && (p.status === "scheduled" || p.status === "validated") ? `<button class="btn sm" data-act="to-manual" data-id="${p.id}" title="Ne pas publier par l'API : vous publiez vous-même sur LinkedIn">Publier à la main</button>` : ""}<button class="btn sm ghost" data-act="unschedule" data-id="${p.id}">Repasser en brouillon</button></div>` : ""}
     </div></article>`;
+}
+
+// Historique d'un brouillon : comparaison mot à mot avec le texte courant, restauration = nouvelle version
+function wordDiff(a, b) {
+  const x = (a || "").split(/(\s+)/), y = (b || "").split(/(\s+)/), n = x.length, m = y.length;
+  if (n * m > 250000) return `<del>${esc(a)}</del> <ins>${esc(b)}</ins>`;
+  const L = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  let i = 0, j = 0, out = "";
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { out += esc(x[i]); i++; j++ }
+    else if (L[i + 1][j] >= L[i][j + 1]) out += `<del>${esc(x[i++])}</del>`;
+    else out += `<ins>${esc(y[j++])}</ins>`;
+  }
+  while (i < n) out += `<del>${esc(x[i++])}</del>`;
+  while (j < m) out += `<ins>${esc(y[j++])}</ins>`;
+  return out;
+}
+function historyHTML(p) {
+  const h = p.history || [];
+  if (!h.length) return "";
+  return `<details class="tw-why" style="display:block"><summary class="small muted">Historique (${h.length} version${h.length > 1 ? "s" : ""})</summary>
+    ${h.map((r, i) => ({ r, i })).reverse().map(({ r, i }) => `<div style="margin-top:8px"><div class="row small muted"><span>${fmtDate(r.at)}${r.feedback ? " · " + esc(r.feedback) : ""}</span><span class="spacer"></span>
+      <button class="btn sm ghost" data-act="restore" data-id="${p.id}" data-idx="${i}">Restaurer cette version</button></div>
+      <div class="small" style="white-space:pre-wrap">${wordDiff(r.text, p.text)}</div><div class="small muted">(<del>retiré</del> / <ins>ajouté</ins> par rapport au texte actuel)</div></div>`).join("")}</details>`;
 }
 
 // LinkedIn : ligne, visuel et aides de méthode d'un brouillon. Les aides ne
@@ -466,7 +529,7 @@ async function dropOnQueue(list, d, before) {
     let by = who();
     if (!by) { by = (prompt("Votre nom, pour signer la validation :") || "").trim(); if (!by) return; store.set("who", by) }
     return run(null, async () => {
-      if (edits[d.id] !== undefined) { await api(`/api/posts/${d.id}/edit`, { text: edits[d.id] }); delete edits[d.id] }
+      await pushEdit(d.id);
       return api(`/api/posts/${d.id}/schedule`, { by, before: before?.dataset.id || "" });
     }, r => `Validé et planifié ${fmtDate(r.scheduledAt)}`);
   }
@@ -981,7 +1044,16 @@ const actions = {
     if (!v) return toast("Choisissez une date et une heure", true);
     await doValidate(b, { at: new Date(v).toISOString() });
   },
-  async save(b) { const id = b.dataset.id; await run(b, () => api(`/api/posts/${id}/edit`, { text: edits[id] ?? "" }), "Enregistré"); delete edits[id] },
+  async save(b) {
+    const id = b.dataset.id;
+    const r = await run(b, () => pushEdit(id), null, { noReload: true });
+    if (r === null) return toast("Rien à enregistrer : le texte n'a pas changé");
+    toast("Enregistré"); await refresh();
+  },
+  async restore(b) {
+    if (!confirm("Restaurer cette version ? Elle devient la version courante ; l'actuelle reste dans l'historique.")) return;
+    await run(b, async () => { delete edits[b.dataset.id]; return api(`/api/posts/${b.dataset.id}/restore`, { index: +b.dataset.idx }) }, "Version restaurée");
+  },
   async reject(b) {
     const id = b.dataset.id, reason = $(`[data-fb="${id}"]`).value.trim() || prompt("Pourquoi ? (facultatif, l'IA en tiendra compte)") || "";
     await run(b, () => api(`/api/posts/${id}/reject`, { reason }), "Rejeté");
@@ -989,7 +1061,7 @@ const actions = {
   async rewrite(b) {
     const id = b.dataset.id, fb = $(`[data-fb="${id}"]`).value.trim();
     if (!fb) return toast("Écrivez d'abord ce qu'il faut changer", true), $(`[data-fb="${id}"]`).focus();
-    await run(b, async () => { if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id]; return api(`/api/posts/${id}/rewrite`, { feedback: fb }) }, "Réécrit", { wait: "Réécriture…" });
+    await run(b, async () => { await pushEdit(id); return api(`/api/posts/${id}/rewrite`, { feedback: fb }) }, "Réécrit", { wait: "Réécriture…" });
   },
   async "li-reply-draft"(b) {
     const target = $("#rp-target").value.trim(), url = $("#rp-url").value.trim();
@@ -1002,19 +1074,19 @@ const actions = {
   },
   async "hand-done"(b) {
     const id = b.dataset.id;
-    if (edits[id] !== undefined) { await api(`/api/posts/${id}/edit`, { text: edits[id] }); edits[id] = undefined }
+    await pushEdit(id);
     await run(b, () => api(`/api/posts/${id}/handled`, {}), "Marqué comme traité");
   },
   async "li-hooks"(b) {
     const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
-    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    await pushEdit(id);
     const r = await run(b, () => api(`/api/posts/${id}/hooks`, {}), null, { wait: "Accroches…", noReload: true });
     out.innerHTML = r.hooks.length ? `<div class="small muted">Choisissez une première ligne, ou aucune (rien ne change sans « Appliquer ») :</div>${r.hooks.map(h => `<div class="row" style="margin-top:4px"><span style="flex:1">${esc(h)}</span><button class="btn sm" data-act="li-hook-apply" data-id="${id}" data-hook="${esc(h)}">Appliquer</button></div>`).join("")}` : `<div class="small muted">Aucune accroche proposée.</div>`;
   },
   async "li-hook-apply"(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/hooks/apply`, { hook: b.dataset.hook }), "Accroche appliquée : contrôle anti-tics à relancer") },
   async "li-humanize"(b) {
     const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
-    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    await pushEdit(id);
     const r = await run(b, () => api(`/api/posts/${id}/humanize`, {}), null, { wait: "Humanizer…", noReload: true });
     out.innerHTML = `<div class="small muted">Version proposée (rien n'est appliqué sans clic) :</div><div class="sample" style="white-space:pre-wrap">${esc(r.text)}</div>
       ${r.changes.length ? `<ul class="small" style="margin:6px 0 0 18px">${r.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : `<div class="small muted">Aucun changement proposé.</div>`}
@@ -1027,14 +1099,14 @@ const actions = {
   },
   async "li-audit"(b) {
     const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
-    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    await pushEdit(id);
     const r = await run(b, () => api(`/api/posts/${id}/audit`, {}), null, { wait: "Audit…", noReload: true });
     out.innerHTML = `<div class="small muted">Audit (informatif, ne bloque rien) · ${r.chars} caractères, accroche de ${r.hookChars}</div>${ticsHTML(r.tics)}
       ${r.suggestions.length ? `<ul class="small" style="margin:6px 0 0 18px">${r.suggestions.map(x => `<li><b>${esc(x.area)}</b> : ${esc(x.advice)}</li>`).join("")}</ul>` : `<div class="small muted">Pas de suggestion.</div>`}`;
   },
   async "li-tics"(b) {
     const id = b.dataset.id, out = $(`[data-li-out="${id}"]`);
-    if (edits[id] !== undefined) await api(`/api/posts/${id}/edit`, { text: edits[id] }), delete edits[id];
+    await pushEdit(id);
     const r = await run(b, () => api(`/api/posts/${id}/tics`, {}), null, { noReload: true });
     out.innerHTML = ticsHTML(r.tics);
   },
@@ -1205,7 +1277,7 @@ async function doValidate(b, extra) {
   if (!by) { by = (prompt("Votre nom, pour signer la validation :") || "").trim(); if (!by) return; store.set("who", by) }
   const id = b.dataset.id;
   await run(b, async () => {
-    if (edits[id] !== undefined) { await api(`/api/posts/${id}/edit`, { text: edits[id] }); delete edits[id] }
+    await pushEdit(id);
     const post = S.posts.find(x => x.id === id);
     if (post && isLI(post.account)) {
       // contrôle anti-tics lancé au moment de la validation, résultat affiché avant confirmation
