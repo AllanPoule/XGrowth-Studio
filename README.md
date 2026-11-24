@@ -339,6 +339,7 @@ studio.go      brouillons, validation,           auth.go     mot de passe PBKDF2
                planification, publication,       providers.go Claude Code / Codex / Gemini CLI / API
                veille, tri, statistiques         ai.go       prompts et schémas JSON
 xbackend.go    agentx, API X officielle, simulation
+inbox.go       boîte de réception : réponses reçues, plafond de lectures, brouillon sur demande
 store.go       un fichier JSON (0600), verrou de fichier partagé entre processus
 ```
 
