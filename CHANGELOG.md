@@ -6,6 +6,15 @@ dernière version.
 
 ## Non publié
 
+### Sécurité
+- **Isolation des CLI d'IA (Codex, Gemini, Claude Code)** : Codex reçoit un `CODEX_HOME` temporaire avec un
+  `config.toml` sans outil ni MCP (et les mêmes réglages en `-c`), `web_search` désactivé, sandbox lecture seule,
+  règles utilisateur ignorées ; Gemini reçoit un `GEMINI_CLI_HOME` temporaire avec une politique qui refuse tous les
+  outils (aussi via `--admin-policy`) et aucun MCP. Les trois CLI tournent avec un environnement en liste blanche
+  (plus aucune clé ni jeton hors connexion propre à la CLI) dans un répertoire de travail vide. Tests sur les
+  arguments, l'environnement et la configuration, dont un contenu de veille malveillant. README aligné sur la
+  protection réelle et ses limites (Gemini non exécuté pour valider la politique).
+
 ### Ajouté
 - **LinkedIn, lot 2** : connexion OAuth (`/api/linkedin/connect`, `/auth/linkedin/callback`), publication par
   l'API officielle (texte et image) à l'heure programmée après validation, état de connexion du jeton, alertes

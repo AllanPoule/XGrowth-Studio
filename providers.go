@@ -143,9 +143,9 @@ func NewAI(s Settings) AI {
 
 const cliTimeout = 5 * time.Minute
 
-// runCLI lance une CLI d'IA. dropEnv retire des variables de l'environnement
-// (ex. ANTHROPIC_API_KEY pour que Claude Code utilise l'abonnement).
-func runCLI(ctx context.Context, bin string, args []string, stdin string, dropEnv []string) ([]byte, []byte, error) {
+// runCLI lance une CLI d'IA avec exactement l'environnement `env` (voir buildCLIEnv : liste blanche) et dans un
+// répertoire de travail vide et temporaire, supprimé ensuite.
+func runCLI(ctx context.Context, bin string, args []string, stdin string, env []string) ([]byte, []byte, error) {
 	path := lookPath(bin)
 	if path == "" {
 		return nil, nil, fmt.Errorf("%s n'est pas installé sur cette machine", bin)
@@ -159,17 +159,7 @@ func runCLI(ctx context.Context, bin string, args []string, stdin string, dropEn
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
-	for _, kv := range os.Environ() {
-		keep := true
-		for _, k := range dropEnv {
-			if strings.HasPrefix(kv, k+"=") {
-				keep = false
-			}
-		}
-		if keep {
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -211,13 +201,8 @@ func decodeInto(raw []byte, out any, who string) error {
 type claudeCodeAI struct{ model string }
 
 func (c *claudeCodeAI) JSON(ctx context.Context, system, user string, schema map[string]any, out any) error {
-	sch, _ := json.Marshal(schema)
-	args := []string{"-p", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
-		"--output-format", "json", "--json-schema", string(sch), "--system-prompt", system}
-	if c.model != "" {
-		args = append(args, "--model", c.model)
-	}
-	stdout, stderr, err := runCLI(ctx, "claude", args, user, []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
+	stdout, stderr, err := runCLI(ctx, "claude", claudeArgs(system, c.model, schema), user,
+		buildCLIEnv(os.Environ(), "claude-code", nil))
 	var res struct {
 		IsError          bool            `json:"is_error"`
 		Subtype          string          `json:"subtype"`
@@ -254,14 +239,26 @@ func (c *codexAI) JSON(ctx context.Context, system, user string, schema map[stri
 	if err := os.WriteFile(schemaFile, sch, 0o600); err != nil {
 		return err
 	}
-	args := []string{"exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
-		"--output-schema", schemaFile, "-o", lastFile}
-	if c.model != "" {
-		args = append(args, "-m", c.model)
+	// CODEX_HOME dédié : config.toml restrictif, identifiants copiés le temps de l'appel.
+	home := filepath.Join(tmp, "codex-home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
 	}
-	args = append(args, "-")
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(codexConfigTOML()), 0o600); err != nil {
+		return err
+	}
+	auth := authCopy{src: codexAuthSource(), dst: filepath.Join(home, "auth.json")}
+	if err := auth.install(); err != nil {
+		return err
+	}
+	defer auth.syncBack()
+	cwd := filepath.Join(tmp, "cwd")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		return err
+	}
+	args := codexArgs(c.model, cwd, schemaFile, lastFile)
 	prompt := system + "\n\nN'utilise aucun outil et ne lis aucun fichier : réponds directement.\n\n---\n\n" + user
-	_, stderr, runErr := runCLI(ctx, "codex", args, prompt, nil)
+	_, stderr, runErr := runCLI(ctx, "codex", args, prompt, buildCLIEnv(os.Environ(), "codex", map[string]string{"CODEX_HOME": home, "HOME": tmp}))
 	raw, rerr := os.ReadFile(lastFile)
 	if rerr != nil || len(bytes.TrimSpace(raw)) == 0 {
 		if runErr != nil {
@@ -297,12 +294,33 @@ type geminiAI struct{ model string }
 func (g *geminiAI) JSON(ctx context.Context, system, user string, schema map[string]any, out any) error {
 	sch, _ := json.MarshalIndent(schema, "", " ")
 	prompt := system + "\n\nRéponds UNIQUEMENT avec un objet JSON conforme à ce schéma, sans texte autour :\n" + string(sch) + "\n\n---\n\n" + user
-	args := []string{"--output-format", "json", "--approval-mode", "default"}
-	if g.model != "" {
-		args = append(args, "-m", g.model)
+	tmp, err := os.MkdirTemp("", "xgrowth-gemini-")
+	if err != nil {
+		return err
 	}
-	args = append(args, "-p", "")
-	stdout, stderr, err := runCLI(ctx, "gemini", args, prompt, nil)
+	defer os.RemoveAll(tmp)
+	// GEMINI_CLI_HOME dédié : politique « tout refuser », MCP vide, identifiants copiés le temps de l'appel.
+	cfg := filepath.Join(tmp, ".gemini")
+	policy := filepath.Join(cfg, "policies", "deny-all.toml")
+	if err := os.MkdirAll(filepath.Dir(policy), 0o700); err != nil {
+		return err
+	}
+	srcDir := geminiHomeSource()
+	if err := os.WriteFile(policy, []byte(geminiPolicyTOML), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), geminiSettings(geminiAuthType(filepath.Join(srcDir, "settings.json"))), 0o600); err != nil {
+		return err
+	}
+	for _, f := range []string{"oauth_creds.json", "google_accounts.json"} {
+		a := authCopy{src: filepath.Join(srcDir, f), dst: filepath.Join(cfg, f)}
+		if err := a.install(); err != nil {
+			return err
+		}
+		defer a.syncBack()
+	}
+	env := buildCLIEnv(os.Environ(), "gemini", map[string]string{"GEMINI_CLI_HOME": tmp, "HOME": tmp})
+	stdout, stderr, err := runCLI(ctx, "gemini", geminiArgs(g.model, policy), prompt, env)
 	var res struct {
 		Response string `json:"response"`
 		Error    *struct {
