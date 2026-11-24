@@ -158,6 +158,7 @@ func (s *Studio) SaveAccount(a *Account) error {
 			}
 			// la pause se règle par SetPaused, jamais par le formulaire du compte
 			a.Paused, a.PausedAt = old.Paused, old.PausedAt
+			a.Inbox = old.Inbox // réglée par SetInboxSettings, jamais par le formulaire
 			*old = *a
 			return nil
 		}
@@ -1466,6 +1467,9 @@ func (s *Studio) TickAI(ctx context.Context) map[string]any {
 	}
 	if n, _ := s.RecordFollowers(ctx); n > 0 {
 		out["followers"] = n
+	}
+	if r := s.SyncInbox(ctx, "", false); len(r) > 0 {
+		out["inbox"] = r
 	}
 	if r := s.RunCampaigns(ctx); len(r) > 0 {
 		out["campaigns"] = r

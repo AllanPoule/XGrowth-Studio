@@ -94,6 +94,8 @@ type Account struct {
 	AIModel    string       `json:"aiModel,omitempty"`    // vide = modèle des réglages
 	Ideas      IdeaSettings `json:"ideas,omitzero"`
 	Timing     Timing       `json:"timing,omitzero"`
+	// Inbox : boîte de réception des réponses reçues (désactivée par défaut, voir inbox.go).
+	Inbox InboxSettings `json:"inbox,omitzero"`
 
 	// Pause : le planificateur ne publie rien pour ce compte (les posts restent
 	// en file, la publication reprend à la reprise). Voir control.go.
@@ -311,7 +313,10 @@ type Data struct {
 	// campagnes de réponses et posts qu'elles ont trouvés
 	Campaigns  []*Campaign  `json:"campaigns,omitempty"`
 	Candidates []*Candidate `json:"candidates,omitempty"`
-	Learnings  []Learning   `json:"learnings"`
+	// boîte de réception : réponses reçues sur les posts du compte et suivi des lectures
+	Inbox      []*InboxEntry          `json:"inbox,omitempty"`
+	InboxState map[string]*InboxState `json:"inboxState,omitempty"`
+	Learnings  []Learning             `json:"learnings"`
 	// règles tirées des retours par la synthèse
 	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
 	// banque d'idées de posts originaux

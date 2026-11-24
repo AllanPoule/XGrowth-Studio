@@ -119,7 +119,8 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"defaults":        map[string]any{"prompts": DefaultPrompts, "postTypes": DefaultPostTypes, "linkedin": map[string]any{"maxChars": linkedinMaxChars, "lines": linkedinLines}},
 			"linkedin":        map[string]any{"configured": st.liCfg().configured(), "accounts": st.linkedinStates(d)},
 			"control":         st.ControlReport(d),
-			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
+			"inbox":           orEmpty(inboxView(d, 300)), "inboxState": inboxStatus(d, st.now()),
+			"log": orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
 	})
@@ -392,6 +393,18 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	})
 	post("/api/posts/{id}/uncertain", func(r *http.Request, b map[string]any) (any, error) {
 		return st.ResolveUncertain(r.PathValue("id"), s(b, "url"), bl(b, "notSent"))
+	})
+	post("/api/inbox/sync", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SyncInbox(r.Context(), s(b, "account"), true), nil
+	})
+	post("/api/inbox/{id}/status", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SetInboxStatus(r.PathValue("id"), s(b, "status"))
+	})
+	post("/api/inbox/{id}/draft", func(r *http.Request, b map[string]any) (any, error) {
+		return st.DraftInboxReply(r.Context(), r.PathValue("id"))
+	})
+	post("/api/accounts/{name}/inbox", func(r *http.Request, b map[string]any) (any, error) {
+		return st.SetInboxSettings(r.PathValue("name"), InboxSettings{Enabled: bl(b, "enabled"), EveryMinutes: n(b, "everyMinutes", 0), DailyCap: n(b, "dailyCap", 0), WindowDays: n(b, "windowDays", 0)})
 	})
 	post("/api/publish-due", func(r *http.Request, b map[string]any) (any, error) {
 		return st.PublishDue(r.Context()), nil
