@@ -29,6 +29,30 @@ dernière version.
   sans perte (données en version 3) : échéance calculée depuis leur date d'acceptation, exemples reconstitués
   depuis leurs retours encore présents. Nouvelles routes : `POST /api/rules/{id}/review`, `POST /api/rules/merge` ;
   `xgrowth rules review`.
+- **Centre de contrôle des publications** (onglet « Contrôle », pastille du nombre de points à traiter) : une page
+  qui répond à « est-ce que tout tourne, et qu'est-ce qui demande mon intervention ? ».
+  - **Pause par compte** : le planificateur ne publie rien pour un compte en pause (les posts restent en file, la
+    publication reprend à la reprise). L'état est dans `data.json` : il survit au redémarrage, et enregistrer le
+    formulaire du compte ne lève pas la pause. Routes : `POST /api/accounts/{nom}/pause`.
+  - **Dernier passage de chaque boucle** (publication, puis veille/tri/statistiques), noté dans `scheduler.json`
+    (dossier de données) avec l'intervalle du planificateur ; alerte si un passage a plus de 3 intervalles
+    (5 minutes au moins) ou n'a jamais eu lieu.
+  - **Publications en retard** : posts planifiés ou validés dont l'heure est passée de plus de 5 minutes, et posts
+    LinkedIn « à publier à la main » jamais marqués publiés. Un retard dû à une pause voulue est listé sans alerte.
+  - **Connexions à renouveler**, selon ce que chaque backend expose : LinkedIn (jeton expiré, bientôt expiré ou
+    absent), xapi (variable du jeton vide). agentx n'expose aucune date d'expiration : le compte est signalé comme
+    non suivi.
+  - **Envois au résultat incertain** : un envoi parti dont la réponse n'est pas arrivée (coupure réseau, délai
+    dépassé après l'envoi, réponse illisible, processus arrêté pendant l'envoi) passe en statut `uncertain` au lieu
+    d'échouer ou de rester « en cours ». Il n'est jamais relancé automatiquement et compte dans les plafonds. Pour
+    le relancer, il faut d'abord vérifier sur le compte : renseigner le lien du post s'il est en ligne (il devient
+    publié), ou confirmer qu'il n'est pas parti (il repart à la prochaine passe). Route :
+    `POST /api/posts/{id}/uncertain` (`url` ou `notSent`). Un refus net (HTTP 4xx/5xx, connexion impossible) reste
+    un échec.
+  - Aucune notification externe (e-mail, push) : la page est le tableau de bord. `GET /api/control` donne le même
+    rapport ; `/api/state` l'inclut (`control`).
+  - Tests Go : compte en pause non publié (et pause conservée après redémarrage), envoi incertain jamais relancé,
+    résolution obligatoire par vérification, détection des retards, des passages anciens et des connexions.
 - **Statistiques utiles pour décider** : la page Performances a un filtre par compte et par période (7, 30, 90 jours
   ou tout), des comparaisons par type de post, longueur, visuel et origine (veille, idée, campagne, à la main), et
   la date du dernier relevé de chaque mesure. Une donnée absente s'affiche « indisponible », jamais 0 (vues non

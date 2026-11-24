@@ -178,7 +178,7 @@ func weekPostTimes(d *Data, a *Account, skipID string) []time.Time {
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusUncertain || p.Status == StatusManual) && p.ScheduledAt != nil:
 			out = append(out, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			out = append(out, *p.PublishedAt)
@@ -226,7 +226,7 @@ func weeklyOccupied(d *Data, a *Account, now time.Time, skipID string) int {
 		switch p.Status {
 		case StatusPublished:
 			t = p.PublishedAt
-		case StatusPublishing, StatusManual:
+		case StatusPublishing, StatusUncertain, StatusManual:
 			t = p.ScheduledAt
 		}
 		if t != nil && !t.Before(ws) && t.Before(we) {

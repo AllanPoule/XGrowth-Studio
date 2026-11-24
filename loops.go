@@ -114,6 +114,8 @@ func (s *Studio) endLoop(name string) {
 	if l := s.loopSt.loops[name]; l != nil {
 		l.Running, l.LastEnd = false, &now
 	}
+	// copie durable lue par le centre de contrôle (survit au redémarrage)
+	s.recordLoop(name, now)
 }
 
 // SchedulerStatus : l'heure du dernier passage de chaque boucle.
@@ -133,6 +135,7 @@ func runSchedulerLoops(ctx context.Context, st *Studio, every time.Duration, onR
 	if every < 10*time.Second {
 		every = 10 * time.Second
 	}
+	st.every = every
 	var wg sync.WaitGroup
 	loop := func(name string, step func(context.Context) map[string]any) {
 		defer wg.Done()
