@@ -205,7 +205,19 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 		return st.AddDraft(s(b, "account"), s(b, "text"), s(b, "replyTo"), s(b, "quoteOf"), s(b, "media"))
 	})
 	post("/api/posts/{id}/edit", func(r *http.Request, b map[string]any) (any, error) {
-		return st.EditPost(r.PathValue("id"), s(b, "text"))
+		o := EditOptions{Clear: bl(b, "clear")}
+		if v, ok := b["version"].(float64); ok {
+			n := int(v)
+			o.ExpectedVersion = &n
+		}
+		return st.EditPostOpts(r.PathValue("id"), s(b, "text"), o)
+	})
+	post("/api/posts/{id}/restore", func(r *http.Request, b map[string]any) (any, error) {
+		v, ok := b["index"].(float64)
+		if !ok {
+			return nil, errors.New("version à restaurer manquante")
+		}
+		return st.RestorePost(r.PathValue("id"), int(v))
 	})
 	post("/api/posts/{id}/media", func(r *http.Request, b map[string]any) (any, error) {
 		id := r.PathValue("id")
