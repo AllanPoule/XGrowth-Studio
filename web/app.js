@@ -198,7 +198,7 @@ function ring(n, max) {
   return `<svg class="ring ${cls}" viewBox="0 0 26 26"><circle class="bgc" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5"/><circle class="fg" cx="13" cy="13" r="${r}" fill="none" stroke-width="2.5" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct)}" transform="rotate(-90 13 13)" stroke-linecap="round"/></svg>`;
 }
 
-const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"], manual: ["À publier à la main", "warn"], handled: ["Traité à la main", "ok"] };
+const STATUS = { draft: ["Brouillon", ""], scheduled: ["Planifié", "accent"], validated: ["Validé", "ok"], publishing: ["Envoi…", "warn"], uncertain: ["Résultat incertain", "bad"], published: ["Publié", "ok"], failed: ["Échec", "bad"], rejected: ["Rejeté", "bad"], manual: ["À publier à la main", "warn"], handled: ["Traité à la main", "ok"] };
 const statusPill = s => { const [l, c] = STATUS[s] || [s, ""]; return `<span class="pill ${c}">${l}</span>` };
 const KIND = { reply: "Réponse", quote: "Citation", comment: "Commentaire", post: "" };
 // LinkedIn : réponses et commentaires = brouillons à poster à la main (jamais validés ni envoyés par l'outil)
@@ -285,6 +285,8 @@ const ROUTES = [
 ];
 // l'onglet « Commentaires » (campagnes de réponses) se place après « Créer »
 ROUTES.splice(3, 0, ["comments", "Commentaires", I.reply]);
+// le centre de contrôle des publications se place avant les Réglages
+ROUTES.splice(ROUTES.length - 1, 0, ["control", "Contrôle", I.check]);
 // l'onglet « Réponses » (LinkedIn, brouillons à poster à la main) n'apparaît que s'il y a un compte LinkedIn
 ROUTES.splice(4, 0, ["replies", "Réponses", I.reply]);
 const routesShown = () => ROUTES.filter(x => x[0] !== "replies" || (S.accounts || []).some(a => a.platform === "linkedin"));
@@ -296,7 +298,7 @@ function counts() {
   const rp = S.posts.filter(p => inCtx(p.account) && p.status === "draft" && isHand(p)).length;
   const w = (S.items || []).filter(i => inCtx(i.account) && i.status === "pending").length;
   const cm = S.posts.filter(p => inCtx(p.account) && (p.status === "draft" || p.status === "failed") && p.campaignId).length;
-  return { queue: q, watch: w, comments: cm, replies: rp };
+  return { queue: q, watch: w, comments: cm, replies: rp, control: S.control?.attention || 0 };
 }
 
 function render() {
@@ -325,7 +327,7 @@ function render() {
     </div>
     <nav class="mnav">${routesShown().filter(x => x[0] !== "published" && (x[0] !== "comments" || (S.campaigns || []).length)).map(([k, l, ic]) => `<a href="#/${k}" class="${k === r ? "on" : ""}">${ic}<span>${l}</span>${c[k] ? `<span class="count">${c[k]}</span>` : ""}</a>`).join("")}</nav>
   </div>`;
-  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments, replies: vReplies };
+  const views = { home: vHome, queue: vQueue, compose: vCompose, calendar: vCalendar, watch: vWatch, published: vPublished, settings: vSettings, comments: vComments, replies: vReplies, control: vControl };
   (views[r] || vHome)($("#view"));
   $("#view").insertAdjacentHTML("afterbegin", liBanner());
 }
@@ -474,6 +476,35 @@ function accountSelect(id = "acc") {
 }
 
 // ------------------------------------------------------------------ vues
+// ------------------------------------------------------------------ centre de contrôle
+const dur = sec => sec < 90 ? `${sec} s` : sec < 5400 ? `${Math.round(sec / 60)} min` : sec < 172800 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} j`;
+function vControl(v) {
+  const c = S.control || { loops: [], late: [], connections: [], uncertain: [], accounts: [], unmonitored: [] };
+  const mine = x => inCtx(x.account);
+  const late = c.late.filter(mine), unc = c.uncertain.filter(mine), conns = c.connections.filter(mine);
+  const accs = c.accounts.filter(a => inCtx(a.name));
+  const stale = c.loops.filter(l => l.stale);
+  const tweet = id => (S.posts || []).find(p => p.id === id);
+  const sect = (title, n, body, empty) => `<h2>${title}${n ? ` <span class="pill warn">${n}</span>` : ""}</h2>${n ? body : `<div class="card"><span class="muted">${empty}</span></div>`}`;
+  const headline = c.ok ? "Tout tourne" : `${c.attention} point${c.attention > 1 ? "s demandent" : " demande"} votre attention`;
+  v.innerHTML = `<div class="head"><div><div class="eyebrow">Centre de contrôle</div><h1>${headline}</h1>
+      <p>${c.ok ? "Le planificateur passe à l'heure, aucune publication en retard, aucune connexion à renouveler." : "Les points ci-dessous bloquent ou risquent de bloquer une publication."}</p></div></div>
+    ${sect("Envois au résultat incertain", unc.length, unc.map(u => `<div class="card" role="alert" style="border-color:var(--bad)"><div class="row"><span class="pill bad">Incertain</span><b>@${esc(handleOf(u.account))}</b><span class="muted small">${u.since ? rel(u.since) : ""}</span></div>
+        <p style="margin:8px 0">${esc(u.preview)}</p><p class="small muted">${esc(u.error || "")}</p>
+        <p class="small">Ouvrez le compte, vérifiez si ce post est en ligne : renseignez son lien s'il l'est, sinon confirmez qu'il n'est pas parti. Rien n'est renvoyé tant que vous n'avez pas vérifié.</p>
+        <div class="row"><button class="btn sm primary" data-act="uncertain-link" data-id="${u.id}">Il est en ligne : renseigner le lien</button><button class="btn sm" data-act="uncertain-resend" data-id="${u.id}">Il n'est pas parti : relancer</button></div></div>`).join(""), "Aucun envoi à vérifier.")}
+    <h2>Boucles du planificateur${stale.length ? ` <span class="pill warn">${stale.length}</span>` : ""}</h2>${c.loops.map(l => `<div class="card"><div class="row"><b>${esc(l.label)}</b><span class="spacer"></span>${l.lastAt ? `<span class="muted small">dernier passage ${rel(l.lastAt)} (toutes les ${dur(l.everySec)})</span>` : `<span class="muted small">aucun passage connu</span>`}<span class="pill ${l.stale ? "bad" : "ok"}">${l.stale ? (l.lastAt ? "Trop ancien" : "Jamais passé") : "À l'heure"}</span></div>${l.stale ? `<p class="small" style="margin-top:8px">${l.lastAt ? `Dernier passage il y a ${dur(l.ageSec)}.` : ""} Le planificateur est peut-être arrêté : lancez <code>xgrowth run</code> ou <code>xgrowth serve</code>.</p>` : ""}</div>`).join("")}
+    ${sect("Publications en retard", late.filter(l => !l.paused).length || late.length, late.map(l => `<div class="card"><div class="row"><span class="pill ${l.paused ? "" : "warn"}">${l.paused ? "Compte en pause" : l.status === "manual" ? "À publier à la main" : "En retard"}</span><b>@${esc(handleOf(l.account))}</b><span class="muted small">prévu ${fmtDate(l.scheduledAt)} · ${dur(l.lateMin * 60)} de retard</span></div>
+        <p style="margin:8px 0 0">${esc(l.preview)}</p>${l.error ? `<p class="small muted" style="margin-top:4px">${esc(l.error)}</p>` : ""}</div>`).join(""), "Aucune publication en retard.")}
+    ${sect("Connexions à renouveler", conns.length, conns.map(k => `<div class="card"><div class="row"><span class="pill ${k.state === "expiring" ? "warn" : "bad"}">${{ expired: "Expirée", expiring: "Bientôt expirée", disconnected: "Non connecté", missing: "Jeton absent" }[k.state] || k.state}</span><b>@${esc(handleOf(k.account))}</b><span class="muted small">${esc(k.backend)}${k.expiresAt ? ` · échéance ${fmtDate(k.expiresAt)}` : ""}</span><span class="spacer"></span>${k.backend === "linkedin" ? `<button class="btn sm primary" data-act="li-connect" data-name="${esc(k.account)}">${k.state === "disconnected" ? "Se connecter" : "Reconnecter"}</button>` : ""}</div><p class="small muted" style="margin-top:8px">${esc(k.detail)}</p></div>`).join(""), "Aucune connexion à renouveler.")}
+    ${c.unmonitored.length ? `<p class="hint">Pas de date d'expiration exposée par le backend de : ${c.unmonitored.map(n => "@" + esc(handleOf(n))).join(", ")}. Une panne de connexion apparaît alors comme un échec de publication.</p>` : ""}
+    <h2>Pause par compte</h2>
+    ${accs.map(a => `<div class="card"><div class="row"><b>@${esc(a.handle || a.name)}</b><span class="pill ${a.paused ? "warn" : "ok"}">${a.paused ? "En pause" : "Actif"}</span>${a.paused && a.since ? `<span class="muted small">depuis ${fmtDate(a.since)}</span>` : ""}<span class="spacer"></span>
+        <button class="btn sm ${a.paused ? "primary" : ""}" data-act="pause" data-name="${esc(a.name)}" data-paused="${a.paused ? "0" : "1"}">${a.paused ? "Reprendre la publication" : "Mettre en pause"}</button></div>
+        <p class="small muted" style="margin-top:8px">${a.paused ? "Rien ne part pour ce compte ; les posts planifiés attendent la reprise." : "Le planificateur publie les posts validés à leur heure."}</p></div>`).join("")}
+    <p class="hint">Mis à jour ${fmtDate(c.at)}. Aucune notification n'est envoyée ailleurs : cette page est le tableau de bord.</p>`;
+}
+
 function vHome(v) {
   const now = Date.now(), d30 = now - 30 * 864e5, d7 = now + 7 * 864e5;
   const pub = S.posts.filter(p => inCtx(p.account) && p.status === "published");
@@ -1206,6 +1237,18 @@ const actions = {
   async "to-manual"(b) {
     if (!confirm("Ce post ne partira plus par l'API : vous le publierez vous-même sur LinkedIn, puis vous le marquerez comme publié. Continuer ?")) return;
     await run(b, () => api(`/api/posts/${b.dataset.id}/manual`, {}), "À publier à la main");
+  },
+  async pause(b) {
+    const on = b.dataset.paused === "1";
+    if (on && !confirm("Mettre ce compte en pause ? Plus rien ne sera publié pour lui tant que vous ne l'aurez pas repris.")) return;
+    await run(b, () => api(`/api/accounts/${encodeURIComponent(b.dataset.name)}/pause`, { paused: on }), on ? "Compte en pause" : "Publication reprise");
+  },
+  async "uncertain-link"(b) {
+    const url = (prompt("Lien du post publié (https://x.com/<compte>/status/<identifiant> ou lien LinkedIn) :") || "").trim();
+    if (url) await run(b, () => api(`/api/posts/${b.dataset.id}/uncertain`, { url }), "Post marqué comme publié");
+  },
+  async "uncertain-resend"(b) {
+    if (confirm("Avez-vous vérifié sur le compte que ce post n'est PAS en ligne ? Il sera republié à la prochaine passe.")) await run(b, () => api(`/api/posts/${b.dataset.id}/uncertain`, { notSent: true }), "Relancé : il repart à la prochaine passe");
   },
   async "mark-published"(b) { const url = (prompt("Lien du post LinkedIn (facultatif) :") || "").trim(); await run(b, () => api(`/api/posts/${b.dataset.id}/mark-published`, { url }), "Marqué comme publié") },
   async unschedule(b) { await run(b, () => api(`/api/posts/${b.dataset.id}/unschedule`, {}), "Renvoyé en brouillon") },

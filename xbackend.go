@@ -161,15 +161,25 @@ func (b *agentxBackend) runEnv(ctx context.Context, out any, env []string, args 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
+	// le processus a tourné (délai dépassé, tué, sortie sans réponse) : un envoi
+	// a pu partir. Un échec au lancement n'a rien envoyé.
+	var exitErr *exec.ExitError
+	ran := ctx.Err() != nil || errors.As(runErr, &exitErr) || runErr == nil
 	if errors.Is(runErr, exec.ErrNotFound) {
 		return fmt.Errorf("binaire agentx introuvable (%s) : compilez github.com/DezXBT/AgentX ou définissez AGENTX_BIN", b.bin)
 	}
 	var resp agentxEnvelope
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		var e error
 		if runErr != nil {
-			return fmt.Errorf("agentx %s : %v %s", sub, runErr, strings.TrimSpace(stderr.String()))
+			e = fmt.Errorf("agentx %s : %v %s", sub, runErr, strings.TrimSpace(stderr.String()))
+		} else {
+			e = fmt.Errorf("agentx %s : réponse non JSON", sub)
 		}
-		return fmt.Errorf("agentx %s : réponse non JSON", sub)
+		if ran {
+			return markUncertain(e)
+		}
+		return e
 	}
 	if !resp.OK {
 		if resp.Error != nil {
@@ -201,7 +211,7 @@ func (b *agentxBackend) Post(ctx context.Context, r PostRequest) (string, error)
 		return "", err
 	}
 	if t.ID == "" {
-		return "", errors.New("agentx n'a pas renvoyé d'identifiant de post")
+		return "", markUncertain(errors.New("agentx n'a pas renvoyé d'identifiant de post"))
 	}
 	return t.ID, nil
 }
@@ -270,7 +280,7 @@ func (b *xapiBackend) do(ctx context.Context, method, path string, body any, out
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("API X %s %s : HTTP %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &xapiHTTPError{status: resp.StatusCode, msg: fmt.Sprintf("API X %s %s : HTTP %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))}
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)
@@ -355,6 +365,9 @@ func (b *xapiBackend) Post(ctx context.Context, r PostRequest) (string, error) {
 		} `json:"data"`
 	}
 	if err := b.do(ctx, "POST", "/tweets", body, &out); err != nil {
+		if xapiPostMaybeSent(err) {
+			return "", markUncertain(err)
+		}
 		return "", err
 	}
 	return out.Data.ID, nil

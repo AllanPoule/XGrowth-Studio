@@ -452,7 +452,7 @@ func nextWindowSlot(d *Data, a *Account, after time.Time, skipID string) (time.T
 			continue
 		}
 		switch {
-		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusManual) && p.ScheduledAt != nil:
+		case (p.Status == StatusScheduled || p.Status == StatusValidated || p.Status == StatusPublishing || p.Status == StatusUncertain || p.Status == StatusManual) && p.ScheduledAt != nil:
 			taken = append(taken, *p.ScheduledAt)
 		case p.Status == StatusPublished && p.PublishedAt != nil:
 			taken = append(taken, *p.PublishedAt)

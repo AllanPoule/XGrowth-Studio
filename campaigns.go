@@ -231,7 +231,7 @@ func repliesOn(d *Data, c *Campaign, day string, loc *time.Location, skipID stri
 		switch p.Status {
 		case StatusPublished:
 			t = p.PublishedAt
-		case StatusScheduled, StatusValidated, StatusPublishing:
+		case StatusScheduled, StatusValidated, StatusPublishing, StatusUncertain:
 			t = p.ScheduledAt
 		}
 		if t != nil && (day == "" || t.In(loc).Format("2006-01-02") == day) {
