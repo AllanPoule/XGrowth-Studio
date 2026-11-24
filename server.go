@@ -81,6 +81,9 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 	gate.routes(mux, decode)
 	registerLinkedIn(mux, st, gate)
 
+	mux.HandleFunc("GET /api/scheduler", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, st.SchedulerStatus(), nil)
+	})
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		d := st.store.Snapshot()
 		items := d.Items

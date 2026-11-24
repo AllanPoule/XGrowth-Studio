@@ -163,7 +163,7 @@ func (s *Studio) aiFor(a *Account) AI {
 	} else if a != nil && a.AIModel != "" {
 		st.Model = a.AIModel
 	}
-	return s.ai(st)
+	return guardedAI{AI: s.ai(st), sem: s.aiSem(), timeout: s.aiTimeout()}
 }
 
 func knownProvider(id string) bool {

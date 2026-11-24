@@ -589,27 +589,14 @@ func check(err error) {
 }
 
 func runScheduler(ctx context.Context, st *Studio, every time.Duration, verbose bool) {
-	if every < 10*time.Second {
-		every = 10 * time.Second
-	}
-	tick := func() {
-		out := st.Tick(ctx)
-		if verbose && len(out) > 1 {
+	var onResult func(map[string]any)
+	if verbose {
+		onResult = func(out map[string]any) {
 			b, _ := json.Marshal(out)
 			fmt.Println(string(b))
 		}
 	}
-	tick()
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			tick()
-		}
-	}
+	runSchedulerLoops(ctx, st, every, onResult)
 }
 
 func parseWhen(s string, loc *time.Location) (time.Time, error) {
