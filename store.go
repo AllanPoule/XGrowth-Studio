@@ -104,6 +104,22 @@ type Metrics struct {
 	Bookmarks      int       `json:"bookmarks"`
 	EngagementRate float64   `json:"engagementRatePct"`
 	UpdatedAt      time.Time `json:"updatedAt,omitzero"`
+	// ViewsKnown : le backend a vraiment renvoyé un nombre de vues. Sans lui,
+	// Views == 0 veut dire « indisponible », pas « zéro vue ». Les relevés
+	// anciens (sans ce champ) comptent des vues dès que Views > 0.
+	ViewsKnown bool `json:"viewsKnown,omitempty"`
+}
+
+// ViewsAvailable : le nombre de vues est une vraie mesure (même nulle).
+func (m *Metrics) ViewsAvailable() bool { return m != nil && (m.ViewsKnown || m.Views > 0) }
+
+// FollowerSample : nombre d'abonnés d'un compte relevé un jour donné (jour
+// calendaire du fuseau du compte). Un jour sans relevé n'a pas de ligne.
+type FollowerSample struct {
+	Account string    `json:"account"`
+	Day     string    `json:"day"` // 2006-01-02
+	Count   int       `json:"count"`
+	At      time.Time `json:"at"`
 }
 
 type Revision struct {
@@ -144,6 +160,11 @@ type Post struct {
 	History     []Revision `json:"history,omitempty"`
 	Version     int        `json:"version,omitempty"` // +1 à chaque changement du texte : sert à refuser une écriture périmée
 	Metrics     *Metrics   `json:"metrics,omitempty"`
+	// MetricsCatchUps : relevés de rattrapage tentés après la fenêtre normale
+	// (voir RefreshMetrics). Plafonné par metricsCatchUpMax : jamais de boucle.
+	MetricsCatchUps int `json:"metricsCatchUps,omitempty"`
+	// MetricsCatchUpAt : date de la dernière tentative de rattrapage (espacement).
+	MetricsCatchUpAt time.Time `json:"metricsCatchUpAt,omitempty"`
 
 	// LinkedIn : contrôle anti-tics d'IA, obligatoire avant la validation. Il
 	// porte sur le texte courant (empreinte) et tombe à la moindre modification.
@@ -287,9 +308,14 @@ type Data struct {
 	// règles tirées des retours par la synthèse
 	RuleProposals []*RuleProposal `json:"ruleProposals,omitempty"`
 	// banque d'idées de posts originaux
-	Ideas []*Idea    `json:"ideas,omitempty"`
-	Log   []LogEntry `json:"log"`
-	Auth  Auth       `json:"auth"`
+	Ideas []*Idea `json:"ideas,omitempty"`
+	// suivi quotidien des abonnés (comptes dont le backend les renvoie)
+	Followers []FollowerSample `json:"followers,omitempty"`
+	// FollowersTriedAt : dernière tentative de relevé des abonnés par compte
+	// (réussie ou non), pour ne pas rappeler le backend en boucle en cas d'échec.
+	FollowersTriedAt map[string]time.Time `json:"followersTriedAt,omitempty"`
+	Log              []LogEntry           `json:"log"`
+	Auth             Auth                 `json:"auth"`
 }
 
 func defaultSettings() Settings {

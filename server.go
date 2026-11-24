@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -120,6 +121,23 @@ func buildHandler(st *Studio, opt ServeOptions) http.Handler {
 			"log":             orEmpty(logs), "calendar": orEmpty(calendar(d, 21, time.Now())),
 			"ai": map[string]string{"provider": ai.AIProvider, "model": ai.Model}, "version": version,
 		}, nil)
+	})
+	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
+		d := st.store.Snapshot()
+		f := StatsFilter{Account: r.URL.Query().Get("account")}
+		if f.Account != "" && d.Account(f.Account) == nil {
+			reply(w, nil, errors.New("compte inconnu"))
+			return
+		}
+		if v := r.URL.Query().Get("days"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 3650 {
+				reply(w, nil, errors.New("période invalide (nombre de jours, 0 = tout)"))
+				return
+			}
+			f.Days = n
+		}
+		reply(w, ComputeStats(d, f, st.now()), nil)
 	})
 	mux.HandleFunc("GET /api/sources", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, st.sourcesStatus(), nil)
