@@ -218,3 +218,25 @@ func TestMediaLimitsPerBackend(t *testing.T) {
 		t.Error("xapi n'envoie pas de visuel : refus attendu")
 	}
 }
+
+func TestLinkedInDroppedImageAltAndNoMissingImageWarning(t *testing.T) {
+	e, _ := liEnv(t, "manual", true)
+	p := e.liDraft(t, "Un post avec visuel")
+	_ = e.st.store.Update(func(d *Data) error { d.Post(p.ID).VisualBrief = "Une photo du devis"; return nil })
+	if _, err := e.st.AttachMedia(p.ID, bytes.NewReader(pngBytes(t))); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.st.SetMediaAlt(p.ID, "Un devis sur un bureau")
+	if err != nil || got.MediaAlt != "Un devis sur un bureau" {
+		t.Fatalf("texte alternatif sur image déposée : %+v %v", got, err)
+	}
+	v, err := e.st.Validate(p.ID, "allan", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range v.Warnings {
+		if strings.Contains(w, "aucune image") {
+			t.Fatalf("avertissement à tort : %q", w)
+		}
+	}
+}

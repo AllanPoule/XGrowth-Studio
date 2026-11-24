@@ -598,7 +598,7 @@ func (s *Studio) SetMediaAlt(id, alt string) (*Post, error) {
 		if handOnly(d.Account(p.Account), p) {
 			return errors.New("une réponse ou un commentaire LinkedIn n'a pas de visuel")
 		}
-		if alt != "" && p.MediaPath == "" {
+		if alt != "" && !hasMedia(p) {
 			return errors.New("ce post n'a pas d'image : ajoutez le visuel avant son texte alternatif")
 		}
 		p.MediaAlt = alt
@@ -819,7 +819,7 @@ func (s *Studio) ValidateWith(id, by string, at *time.Time, now bool, opts Valid
 				return fmt.Errorf("validation refusée : tics d'IA à corriger, ou à accepter explicitement (« je garde ces formulations ») : %s", ticSummary(hi))
 			}
 			p.TicsAcknowledged = len(hi) > 0
-			if p.VisualBrief != "" && p.MediaPath == "" {
+			if p.VisualBrief != "" && !hasMedia(p) {
 				p.Warnings = append(p.Warnings, "un visuel est proposé mais aucune image n'est associée : le post partira sans image")
 			}
 		}
@@ -1398,3 +1398,6 @@ func (s *Studio) Tick(ctx context.Context) map[string]any {
 	}
 	return out
 }
+
+// hasMedia : le post a une image, déposée (copie stable) ou par chemin serveur (ancien mode).
+func hasMedia(p *Post) bool { return p.MediaPath != "" || p.MediaFile != "" }
