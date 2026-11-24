@@ -6,6 +6,17 @@ dernière version.
 
 ## Non publié
 
+### Sécurité
+- **Isolation des CLI d'IA (Codex, Gemini, Claude Code)** : Codex reçoit un `CODEX_HOME` temporaire avec un
+  `config.toml` sans shell, sans MCP (et les mêmes réglages en `-c`), `web_search` désactivé, sandbox lecture seule,
+  règles utilisateur ignorées (Codex 0.171.0 garde cependant des outils internes sans effet réel : `exec` isolé,
+  `request_user_input`, `sleep`, collaboration ; voir le README) ; Gemini reçoit un `GEMINI_CLI_HOME` temporaire avec une politique qui refuse tous les
+  outils (aussi via `--admin-policy`) et aucun MCP. Les trois CLI tournent avec un environnement en liste blanche
+  (plus aucune clé ni jeton hors connexion propre à la CLI) dans un répertoire de travail vide. Tests sur les
+  arguments, l'environnement et la configuration, dont un contenu de veille malveillant. README aligné sur la
+  protection réelle et ses limites (Gemini non exécuté pour valider la politique). Les identifiants copiés ne sont
+  recopiés que si la source n'a pas changé pendant l'appel ; les variables Vertex AI de Gemini (hors chemin de clés) sont transmises.
+
 ### Corrigé
 - **Brouillons, enregistrement sûr** : « Enregistrer » sans modification n'envoie plus rien (il envoyait une chaîne
   vide qui effaçait le texte). Le serveur refuse un texte vide sur un brouillon non vide, sauf effacement explicite
