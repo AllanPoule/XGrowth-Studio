@@ -69,14 +69,16 @@ Ouvrez le studio, saisissez ce code, choisissez un mot de passe : l'assistant vo
 | **Gemini CLI** *(expérimental)* | `gemini`, connecté | votre compte Google |
 | **API Claude** | `ANTHROPIC_API_KEY` | à l'usage (`claude-opus-5-5` par défaut) |
 
-Les CLI sont lancées en mode non interactif, avec **tous leurs outils désactivés par configuration** (pas de shell,
-pas de fichiers, pas de web, pas de MCP), dans un dossier de travail vide et temporaire. Les posts lus sur X sont des
-données non fiables : cette configuration sert à ce qu'une instruction cachée dans un post ne puisse rien exécuter.
+Les CLI sont lancées en mode non interactif, avec leurs outils désactivés par configuration autant que chaque CLI le
+permet (Claude Code et Gemini : tous ; Codex : le shell et les fichiers, mais pas tous les outils internes, voir
+les limites), dans un dossier de travail vide et temporaire. Les posts lus sur X sont des données non fiables :
+cette configuration sert à ce qu'une instruction cachée dans un post ne puisse ni exécuter de commande, ni lire ou
+écrire un fichier, ni joindre le réseau.
 
 | CLI | Protection appliquée à chaque appel |
 |---|---|
 | **Claude Code** | `--tools ""`, `--strict-mcp-config` (aucun MCP), `--setting-sources ""`, sans persistance de session. Lancé sans `ANTHROPIC_API_KEY` pour utiliser l'abonnement et non l'API. |
-| **Codex** | `CODEX_HOME` temporaire dédié avec un `config.toml` restrictif (écrit aussi en `-c`, qui l'emporte sur la config de l'utilisateur) : outil shell, exécution unifiée, apps, plugins, hooks, multi-agent, navigateur, images désactivés ; `web_search` désactivé ; aucun serveur MCP ; sandbox `read-only` ; approbation `never` ; règles utilisateur ignorées. |
+| **Codex** | `CODEX_HOME` temporaire dédié avec un `config.toml` restrictif (écrit aussi en `-c`, qui l'emporte sur la config de l'utilisateur) : outil shell (`exec_command`, `write_stdin`), `view_image`, apps, plugins, hooks, navigateur, génération d'images désactivés ; `web_search` désactivé ; aucun serveur MCP ; sandbox `read-only` ; approbation `never` ; règles utilisateur ignorées. **Des outils internes subsistent** (voir les limites). |
 | **Gemini CLI** | `GEMINI_CLI_HOME` temporaire dédié, avec une politique qui refuse tous les outils (règle `*` en `deny`, aussi passée par `--admin-policy`, niveau que les fichiers utilisateur ne surchargent pas) et aucun serveur MCP. |
 
 Pour les trois : environnement réduit à une liste blanche (`PATH`, `HOME`, langue, certificats, proxy, plus la variable
@@ -86,11 +88,22 @@ JSON Schema.
 
 **Limites, à connaître :**
 - Ces garanties reposent sur les options de chaque CLI. Elles sont vérifiées par des tests sur la commande construite
-  (arguments, environnement, configuration), pas par un test réel de chaque CLI à chaque version. Codex a été
-  vérifié avec `codex-cli 0.171.0` ; **Gemini CLI n'a pas pu être lancé pour valider la politique** (binaire absent
-  de la machine de développement) : le format suit la documentation officielle du moteur de politiques.
+  (arguments, environnement, configuration), pas par un test réel de chaque CLI à chaque version.
+- **Codex 0.171.0 garde des outils internes** qu'aucun réglage connu ne retire (constaté avec `codex debug prompt-input`
+  et les mêmes `-c`) : `exec` (isolat JavaScript sans fichiers ni réseau, avec `apply_patch` et des outils de
+  ressources MCP imbriqués), `request_user_input`, `sleep` et les outils de collaboration (`spawn_agent`…). Les
+  réglages `features.multi_agent` et `features.unified_exec` n'y changent rien. Ils restent sans effet sur
+  la machine parce que le sandbox est en lecture seule, qu'aucun serveur MCP n'existe, que le dossier de travail est
+  vide et qu'il n'y a pas de réseau. Pour revérifier après une mise à jour : `codex debug prompt-input` avec les
+  mêmes `-c`, puis recenser les outils listés.
+- **Gemini CLI n'a pas pu être lancé pour valider la politique** (binaire absent de la machine de développement) :
+  le format suit la documentation officielle du moteur de politiques.
+- Gemini : seules `GEMINI_API_KEY`, `GOOGLE_API_KEY` et `GOOGLE_GENAI_USE_VERTEXAI`,
+  `GOOGLE_CLOUD_PROJECT` et `GOOGLE_CLOUD_LOCATION` sont transmises. `GOOGLE_APPLICATION_CREDENTIALS` (chemin d'un
+  fichier de clés) ne l'est pas : une connexion Vertex par compte de service n'est donc pas prise en charge.
 - Les identifiants de connexion de la CLI (abonnement) doivent rester accessibles : ceux de Codex et de Gemini sont
-  copiés (droits 0600) dans le dossier temporaire le temps de l'appel, puis recopiés si la CLI a renouvelé le jeton.
+  copiés (droits 0600) dans le dossier temporaire le temps de l'appel, puis recopiés si la CLI a renouvelé le jeton
+  et que le fichier d'origine n'a pas changé entre-temps.
   Claude Code lit sa connexion dans son dossier habituel. Une CLI compromise ou boguée verrait donc ces identifiants.
 - Le modèle peut toujours produire un texte trompeur ; c'est pourquoi rien ne se publie sans validation humaine.
 - Une nouvelle version d'une CLI peut ajouter un outil que la configuration ne connaît pas encore : revérifier après

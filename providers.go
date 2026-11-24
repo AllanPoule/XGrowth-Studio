@@ -247,7 +247,7 @@ func (c *codexAI) JSON(ctx context.Context, system, user string, schema map[stri
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(codexConfigTOML()), 0o600); err != nil {
 		return err
 	}
-	auth := authCopy{src: codexAuthSource(), dst: filepath.Join(home, "auth.json")}
+	auth := &authCopy{src: codexAuthSource(), dst: filepath.Join(home, "auth.json")}
 	if err := auth.install(); err != nil {
 		return err
 	}
@@ -313,7 +313,7 @@ func (g *geminiAI) JSON(ctx context.Context, system, user string, schema map[str
 		return err
 	}
 	for _, f := range []string{"oauth_creds.json", "google_accounts.json"} {
-		a := authCopy{src: filepath.Join(srcDir, f), dst: filepath.Join(cfg, f)}
+		a := &authCopy{src: filepath.Join(srcDir, f), dst: filepath.Join(cfg, f)}
 		if err := a.install(); err != nil {
 			return err
 		}

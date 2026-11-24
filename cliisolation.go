@@ -33,7 +33,7 @@ var providerEnvAllow = map[string][]string{
 	// ANTHROPIC_API_KEY et ANTHROPIC_AUTH_TOKEN sont volontairement absents : Claude Code utilise l'abonnement.
 	"claude-code": {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME"},
 	"codex":       {},
-	"gemini":      {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+	"gemini":      {"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"},
 }
 
 // buildCLIEnv construit l'environnement d'une CLI : liste blanche de base + liste du fournisseur + `set`
@@ -80,7 +80,10 @@ func claudeArgs(system, model string, schema map[string]any) []string {
 
 // codexConfig : réglages imposés (valeurs TOML). Ils sont écrits dans le config.toml du CODEX_HOME dédié ET
 // passés par `-c` (priorité la plus haute) : un config.toml de l'utilisateur ne peut rien rouvrir.
-// Clés vérifiées avec `codex features list` (codex-cli 0.171.0) ; une clé inconnue est ignorée par la CLI.
+// Clés présentes dans `codex features list` (codex-cli 0.171.0) ; une clé inconnue est ignorée par la CLI.
+// Limite constatée avec `codex debug prompt-input` : ces réglages retirent le shell (exec_command, write_stdin) et
+// view_image, mais pas exec (isolat JS), request_user_input, sleep ni les outils de collaboration ; features.unified_exec
+// reste affiché actif. Ils restent sans effet réel : sandbox en lecture seule, aucun MCP, dossier vide, pas de réseau.
 var codexConfig = [][2]string{
 	{"approval_policy", `"never"`},
 	{"sandbox_mode", `"read-only"`},
@@ -177,9 +180,14 @@ func geminiArgs(model, adminPolicy string) []string {
 
 // authCopy : un fichier d'identifiants de la CLI, copié dans le dossier dédié le temps de l'appel. Si la CLI le
 // renouvelle (jeton rafraîchi), la nouvelle version est recopiée à sa place : sinon la connexion serait perdue.
-type authCopy struct{ src, dst string }
+// La version installée est mémorisée : on ne recopie que si la CLI a changé la copie ET si personne d'autre n'a
+// modifié la source entre-temps (sinon on écraserait un jeton plus récent, p. ex. renouvelé par la CLI interactive).
+type authCopy struct {
+	src, dst  string
+	installed []byte
+}
 
-func (a authCopy) install() error {
+func (a *authCopy) install() error {
 	b, err := os.ReadFile(a.src)
 	if err != nil {
 		return nil // pas d'identifiants à cet endroit : la CLI le dira elle-même
@@ -187,14 +195,24 @@ func (a authCopy) install() error {
 	if err := os.MkdirAll(filepath.Dir(a.dst), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(a.dst, b, 0o600)
+	if err := os.WriteFile(a.dst, b, 0o600); err != nil {
+		return err
+	}
+	a.installed = b
+	return nil
 }
 
-func (a authCopy) syncBack() {
-	orig, err1 := os.ReadFile(a.src)
-	now, err2 := os.ReadFile(a.dst)
-	if err1 != nil || err2 != nil || len(bytes.TrimSpace(now)) == 0 || bytes.Equal(orig, now) {
+func (a *authCopy) syncBack() {
+	if a.installed == nil {
 		return
+	}
+	cur, err1 := os.ReadFile(a.src)
+	now, err2 := os.ReadFile(a.dst)
+	if err1 != nil || err2 != nil || len(bytes.TrimSpace(now)) == 0 {
+		return
+	}
+	if bytes.Equal(now, a.installed) || !bytes.Equal(cur, a.installed) {
+		return // la CLI n'a rien renouvelé, ou la source a changé entre-temps : on ne touche à rien
 	}
 	tmp := a.src + ".xgrowth-tmp"
 	if os.WriteFile(tmp, now, 0o600) == nil {

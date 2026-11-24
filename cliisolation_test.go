@@ -230,7 +230,7 @@ echo '{"text":"ok","rationale":"r"}' > "$out"`},
 
 func TestAuthCopySyncsRefreshedToken(t *testing.T) {
 	d := t.TempDir()
-	a := authCopy{src: filepath.Join(d, "src", "auth.json"), dst: filepath.Join(d, "dst", "auth.json")}
+	a := &authCopy{src: filepath.Join(d, "src", "auth.json"), dst: filepath.Join(d, "dst", "auth.json")}
 	os.MkdirAll(filepath.Dir(a.src), 0o700)
 	os.WriteFile(a.src, []byte("v1"), 0o600)
 	if err := a.install(); err != nil {
@@ -245,7 +245,29 @@ func TestAuthCopySyncsRefreshedToken(t *testing.T) {
 		t.Errorf("le jeton renouvelé doit être recopié, obtenu %q", b)
 	}
 	// source absente : rien à installer, pas d'erreur
-	if err := (authCopy{src: filepath.Join(d, "nope"), dst: filepath.Join(d, "x", "y")}).install(); err != nil {
+	if err := (&authCopy{src: filepath.Join(d, "nope"), dst: filepath.Join(d, "x", "y")}).install(); err != nil {
 		t.Error(err)
+	}
+}
+
+// Un jeton renouvelé par l'utilisateur pendant l'appel (source = v2) ne doit jamais être écrasé par l'ancienne copie.
+func TestAuthCopyKeepsNewerSource(t *testing.T) {
+	d := t.TempDir()
+	a := &authCopy{src: filepath.Join(d, "src", "auth.json"), dst: filepath.Join(d, "dst", "auth.json")}
+	os.MkdirAll(filepath.Dir(a.src), 0o700)
+	os.WriteFile(a.src, []byte("v1"), 0o600)
+	if err := a.install(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(a.src, []byte("v2"), 0o600) // renouvelé ailleurs pendant l'appel
+	a.syncBack()                            // la copie vaut toujours v1
+	if b, _ := os.ReadFile(a.src); string(b) != "v2" {
+		t.Errorf("la source plus récente a été écrasée : %q", b)
+	}
+	// la CLI renouvelle ET la source a aussi changé : on ne touche pas non plus à la source
+	os.WriteFile(a.dst, []byte("v3"), 0o600)
+	a.syncBack()
+	if b, _ := os.ReadFile(a.src); string(b) != "v2" {
+		t.Errorf("la source modifiée a été écrasée : %q", b)
 	}
 }
